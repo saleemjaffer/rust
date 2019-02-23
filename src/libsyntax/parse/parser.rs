@@ -6557,6 +6557,13 @@ impl<'a> Parser<'a> {
             self.expect(&token::OpenDelim(token::Brace))?;
             let mut trait_items = vec![];
             while !self.eat(&token::CloseDelim(token::Brace)) {
+                if let token::DocComment(_) = self.token {
+                    if self.look_ahead(1, |tok| tok == &token::Token::CloseDelim(token::Brace)) {
+                        self.span_fatal_err(self.span, Error::UselessDocComment).emit();
+                        self.bump();
+                        continue;
+                    }
+                }
                 let mut at_end = false;
                 match self.parse_trait_item(&mut at_end) {
                     Ok(item) => trait_items.push(item),
