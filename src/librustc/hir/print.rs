@@ -1007,8 +1007,8 @@ impl<'a> State<'a> {
                 }
                 self.end()?
             }
-            hir::StmtKind::Item(ref item) => {
-                self.ann.nested(self, Nested::Item(**item))?
+            hir::StmtKind::Item(item) => {
+                self.ann.nested(self, Nested::Item(item))?
             }
             hir::StmtKind::Expr(ref expr) => {
                 self.space_if_not_bol()?;
@@ -2248,7 +2248,6 @@ impl<'a> State<'a> {
         let generics = hir::Generics {
             params: hir::HirVec::new(),
             where_clause: hir::WhereClause {
-                id: ast::DUMMY_NODE_ID,
                 hir_id: hir::DUMMY_HIR_ID,
                 predicates: hir::HirVec::new(),
             },

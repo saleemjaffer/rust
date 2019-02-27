@@ -16,7 +16,7 @@ use rustc::mir::{UserTypeProjection};
 use rustc::mir::interpret::{Scalar, GlobalId, ConstValue, sign_extend};
 use rustc::ty::{self, Region, TyCtxt, AdtDef, Ty, Lift, UserType};
 use rustc::ty::{CanonicalUserType, CanonicalUserTypeAnnotation, CanonicalUserTypeAnnotations};
-use rustc::ty::subst::{Substs, Kind};
+use rustc::ty::subst::{SubstsRef, Kind};
 use rustc::ty::layout::VariantIdx;
 use rustc::hir::{self, PatKind, RangeEnd};
 use rustc::hir::def::{Def, CtorKind};
@@ -135,7 +135,7 @@ pub enum PatternKind<'tcx> {
     /// multiple variants.
     Variant {
         adt_def: &'tcx AdtDef,
-        substs: &'tcx Substs<'tcx>,
+        substs: SubstsRef<'tcx>,
         variant_index: VariantIdx,
         subpatterns: Vec<FieldPattern<'tcx>>,
     },
@@ -330,13 +330,13 @@ pub struct PatternContext<'a, 'tcx: 'a> {
     pub tcx: TyCtxt<'a, 'tcx, 'tcx>,
     pub param_env: ty::ParamEnv<'tcx>,
     pub tables: &'a ty::TypeckTables<'tcx>,
-    pub substs: &'tcx Substs<'tcx>,
+    pub substs: SubstsRef<'tcx>,
     pub errors: Vec<PatternError>,
 }
 
 impl<'a, 'tcx> Pattern<'tcx> {
     pub fn from_hir(tcx: TyCtxt<'a, 'tcx, 'tcx>,
-                    param_env_and_substs: ty::ParamEnvAnd<'tcx, &'tcx Substs<'tcx>>,
+                    param_env_and_substs: ty::ParamEnvAnd<'tcx, SubstsRef<'tcx>>,
                     tables: &'a ty::TypeckTables<'tcx>,
                     pat: &'tcx hir::Pat) -> Self {
         let mut pcx = PatternContext::new(tcx, param_env_and_substs, tables);
@@ -352,7 +352,7 @@ impl<'a, 'tcx> Pattern<'tcx> {
 
 impl<'a, 'tcx> PatternContext<'a, 'tcx> {
     pub fn new(tcx: TyCtxt<'a, 'tcx, 'tcx>,
-               param_env_and_substs: ty::ParamEnvAnd<'tcx, &'tcx Substs<'tcx>>,
+               param_env_and_substs: ty::ParamEnvAnd<'tcx, SubstsRef<'tcx>>,
                tables: &'a ty::TypeckTables<'tcx>) -> Self {
         PatternContext {
             tcx,
@@ -631,7 +631,7 @@ impl<'a, 'tcx> PatternContext<'a, 'tcx> {
                     fields.iter()
                           .map(|field| {
                               FieldPattern {
-                                  field: Field::new(self.tcx.field_index(field.node.id,
+                                  field: Field::new(self.tcx.field_index(field.node.hir_id,
                                                                          self.tables)),
                                   pattern: self.lower_pattern(&field.node.pat),
                               }
@@ -965,7 +965,7 @@ impl<'a, 'tcx> PatternContext<'a, 'tcx> {
                 PatternKind::Constant {
                     value: cv,
                 }
-            },
+            }
             ty::Adt(adt_def, _) if adt_def.is_union() => {
                 // Matching on union fields is unsafe, we can't hide it in constants
                 self.tcx.sess.span_err(span, "cannot use unions in constant patterns");
@@ -978,7 +978,7 @@ impl<'a, 'tcx> PatternContext<'a, 'tcx> {
                                     self.tcx.item_path_str(adt_def.did));
                 self.tcx.sess.span_err(span, &msg);
                 PatternKind::Wild
-            },
+            }
             ty::Adt(adt_def, substs) if adt_def.is_enum() => {
                 let variant_index = const_variant_index(
                     self.tcx, self.param_env, cv
@@ -993,7 +993,7 @@ impl<'a, 'tcx> PatternContext<'a, 'tcx> {
                     variant_index,
                     subpatterns,
                 }
-            },
+            }
             ty::Adt(adt_def, _) => {
                 let struct_var = adt_def.non_enum_variant();
                 PatternKind::Leaf {
@@ -1018,7 +1018,7 @@ impl<'a, 'tcx> PatternContext<'a, 'tcx> {
                 PatternKind::Constant {
                     value: cv,
                 }
-            },
+            }
         };
 
         Pattern {
@@ -1093,7 +1093,7 @@ macro_rules! CloneImpls {
 CloneImpls!{ <'tcx>
     Span, Field, Mutability, ast::Name, ast::NodeId, usize, ty::Const<'tcx>,
     Region<'tcx>, Ty<'tcx>, BindingMode, &'tcx AdtDef,
-    &'tcx Substs<'tcx>, &'tcx Kind<'tcx>, UserType<'tcx>,
+    SubstsRef<'tcx>, &'tcx Kind<'tcx>, UserType<'tcx>,
     UserTypeProjection<'tcx>, PatternTypeProjection<'tcx>
 }
 
@@ -1252,19 +1252,19 @@ pub fn compare_const_vals<'a, 'gcx, 'tcx>(
                 let l = ::rustc_apfloat::ieee::Single::from_bits(a);
                 let r = ::rustc_apfloat::ieee::Single::from_bits(b);
                 l.partial_cmp(&r)
-            },
+            }
             ty::Float(ast::FloatTy::F64) => {
                 let l = ::rustc_apfloat::ieee::Double::from_bits(a);
                 let r = ::rustc_apfloat::ieee::Double::from_bits(b);
                 l.partial_cmp(&r)
-            },
+            }
             ty::Int(_) => {
                 let layout = tcx.layout_of(ty).ok()?;
                 assert!(layout.abi.is_signed());
                 let a = sign_extend(a, layout.size);
                 let b = sign_extend(b, layout.size);
                 Some((a as i128).cmp(&(b as i128)))
-            },
+            }
             _ => Some(a.cmp(&b)),
         }
     }

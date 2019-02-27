@@ -21,6 +21,8 @@
 #![feature(concat_idents)]
 #![feature(link_args)]
 #![feature(static_nobundle)]
+#![deny(rust_2018_idioms)]
+#![allow(explicit_outlives_requirements)]
 
 use back::write::create_target_machine;
 use syntax_pos::symbol::Symbol;
@@ -29,16 +31,11 @@ extern crate flate2;
 #[macro_use] extern crate bitflags;
 extern crate libc;
 #[macro_use] extern crate rustc;
-extern crate jobserver;
-extern crate num_cpus;
 extern crate rustc_mir;
 extern crate rustc_allocator;
-extern crate rustc_apfloat;
 extern crate rustc_target;
 #[macro_use] extern crate rustc_data_structures;
-extern crate rustc_demangle;
 extern crate rustc_incremental;
-extern crate rustc_llvm;
 extern crate rustc_codegen_utils;
 extern crate rustc_codegen_ssa;
 extern crate rustc_fs_util;
@@ -48,9 +45,7 @@ extern crate rustc_fs_util;
 extern crate syntax_pos;
 extern crate rustc_errors as errors;
 extern crate serialize;
-extern crate cc; // Used to locate MSVC
 extern crate tempfile;
-extern crate memmap;
 
 use rustc_codegen_ssa::traits::*;
 use rustc_codegen_ssa::back::write::{CodegenContext, ModuleConfig, FatLTOInput};
@@ -118,17 +113,22 @@ mod va_arg;
 pub struct LlvmCodegenBackend(());
 
 impl ExtraBackendMethods for LlvmCodegenBackend {
-    fn new_metadata(&self, tcx: TyCtxt, mod_name: &str) -> ModuleLlvm {
+    fn new_metadata(&self, tcx: TyCtxt<'_, '_, '_>, mod_name: &str) -> ModuleLlvm {
         ModuleLlvm::new(tcx, mod_name)
     }
     fn write_metadata<'b, 'gcx>(
         &self,
         tcx: TyCtxt<'b, 'gcx, 'gcx>,
-        metadata: &ModuleLlvm
+        metadata: &mut ModuleLlvm
     ) -> EncodedMetadata {
         base::write_metadata(tcx, metadata)
     }
-    fn codegen_allocator(&self, tcx: TyCtxt, mods: &ModuleLlvm, kind: AllocatorKind) {
+    fn codegen_allocator(
+        &self,
+        tcx: TyCtxt<'_, '_, '_>,
+        mods: &mut ModuleLlvm,
+        kind: AllocatorKind
+    ) {
         unsafe { allocator::codegen(tcx, mods, kind) }
     }
     fn compile_codegen_unit<'a, 'tcx: 'a>(
@@ -284,14 +284,14 @@ impl CodegenBackend for LlvmCodegenBackend {
         box metadata::LlvmMetadataLoader
     }
 
-    fn provide(&self, providers: &mut ty::query::Providers) {
+    fn provide(&self, providers: &mut ty::query::Providers<'_>) {
         rustc_codegen_utils::symbol_names::provide(providers);
         rustc_codegen_ssa::back::symbol_export::provide(providers);
         rustc_codegen_ssa::base::provide_both(providers);
         attributes::provide(providers);
     }
 
-    fn provide_extern(&self, providers: &mut ty::query::Providers) {
+    fn provide_extern(&self, providers: &mut ty::query::Providers<'_>) {
         rustc_codegen_ssa::back::symbol_export::provide_extern(providers);
         rustc_codegen_ssa::base::provide_both(providers);
         attributes::provide_extern(providers);
@@ -366,7 +366,7 @@ unsafe impl Send for ModuleLlvm { }
 unsafe impl Sync for ModuleLlvm { }
 
 impl ModuleLlvm {
-    fn new(tcx: TyCtxt, mod_name: &str) -> Self {
+    fn new(tcx: TyCtxt<'_, '_, '_>, mod_name: &str) -> Self {
         unsafe {
             let llcx = llvm::LLVMRustContextCreate(tcx.sess.fewer_names());
             let llmod_raw = context::create_module(tcx, llcx, mod_name) as *const _;

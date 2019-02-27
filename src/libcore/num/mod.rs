@@ -2,7 +2,7 @@
 
 #![stable(feature = "rust1", since = "1.0.0")]
 
-use convert::TryFrom;
+use convert::{TryFrom, Infallible};
 use fmt;
 use intrinsics;
 use mem;
@@ -1215,7 +1215,7 @@ $EndFeature, "
 ```"),
             #[stable(feature = "num_wrapping", since = "1.2.0")]
             #[inline]
-            pub fn wrapping_neg(self) -> Self {
+            pub const fn wrapping_neg(self) -> Self {
                 self.overflowing_neg().0
             }
         }
@@ -1569,12 +1569,8 @@ assert_eq!(", stringify!($SelfT), "::MIN.overflowing_neg(), (", stringify!($Self
 ```"),
             #[inline]
             #[stable(feature = "wrapping", since = "1.7.0")]
-            pub fn overflowing_neg(self) -> (Self, bool) {
-                if self == Self::min_value() {
-                    (Self::min_value(), true)
-                } else {
-                    (-self, false)
-                }
+            pub const fn overflowing_neg(self) -> (Self, bool) {
+                ((!self).wrapping_add(1), self == Self::min_value())
             }
         }
 
@@ -2004,7 +2000,6 @@ assert_eq!(value, ", $swap_op, ");
 When starting from a slice rather than an array, fallible conversion APIs can be used:
 
 ```
-#![feature(try_from)]
 use std::convert::TryInto;
 
 fn read_be_", stringify!($SelfT), "(input: &mut &[u8]) -> ", stringify!($SelfT), " {
@@ -2036,7 +2031,6 @@ assert_eq!(value, ", $swap_op, ");
 When starting from a slice rather than an array, fallible conversion APIs can be used:
 
 ```
-#![feature(try_from)]
 use std::convert::TryInto;
 
 fn read_be_", stringify!($SelfT), "(input: &mut &[u8]) -> ", stringify!($SelfT), " {
@@ -2078,7 +2072,6 @@ assert_eq!(value, ", $swap_op, ");
 When starting from a slice rather than an array, fallible conversion APIs can be used:
 
 ```
-#![feature(try_from)]
 use std::convert::TryInto;
 
 fn read_be_", stringify!($SelfT), "(input: &mut &[u8]) -> ", stringify!($SelfT), " {
@@ -3092,7 +3085,7 @@ assert_eq!(100", stringify!($SelfT), ".wrapping_rem_euclid(10), 0);
         /// ```
         #[stable(feature = "num_wrapping", since = "1.2.0")]
         #[inline]
-        pub fn wrapping_neg(self) -> Self {
+        pub const fn wrapping_neg(self) -> Self {
             self.overflowing_neg().0
         }
 
@@ -3397,7 +3390,7 @@ assert_eq!(2", stringify!($SelfT), ".overflowing_neg(), (-2i32 as ", stringify!(
 ```"),
             #[inline]
             #[stable(feature = "wrapping", since = "1.7.0")]
-            pub fn overflowing_neg(self) -> (Self, bool) {
+            pub const fn overflowing_neg(self) -> (Self, bool) {
                 ((!self).wrapping_add(1), self != 0)
             }
         }
@@ -3771,7 +3764,6 @@ assert_eq!(value, ", $swap_op, ");
 When starting from a slice rather than an array, fallible conversion APIs can be used:
 
 ```
-#![feature(try_from)]
 use std::convert::TryInto;
 
 fn read_be_", stringify!($SelfT), "(input: &mut &[u8]) -> ", stringify!($SelfT), " {
@@ -3803,7 +3795,6 @@ assert_eq!(value, ", $swap_op, ");
 When starting from a slice rather than an array, fallible conversion APIs can be used:
 
 ```
-#![feature(try_from)]
 use std::convert::TryInto;
 
 fn read_be_", stringify!($SelfT), "(input: &mut &[u8]) -> ", stringify!($SelfT), " {
@@ -3845,7 +3836,6 @@ assert_eq!(value, ", $swap_op, ");
 When starting from a slice rather than an array, fallible conversion APIs can be used:
 
 ```
-#![feature(try_from)]
 use std::convert::TryInto;
 
 fn read_be_", stringify!($SelfT), "(input: &mut &[u8]) -> ", stringify!($SelfT), " {
@@ -4508,7 +4498,7 @@ macro_rules! from_str_radix_int_impl {
 from_str_radix_int_impl! { isize i8 i16 i32 i64 i128 usize u8 u16 u32 u64 u128 }
 
 /// The error type returned when a checked integral type conversion fails.
-#[unstable(feature = "try_from", issue = "33417")]
+#[stable(feature = "try_from", since = "1.34.0")]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct TryFromIntError(());
 
@@ -4523,24 +4513,34 @@ impl TryFromIntError {
     }
 }
 
-#[unstable(feature = "try_from", issue = "33417")]
+#[stable(feature = "try_from", since = "1.34.0")]
 impl fmt::Display for TryFromIntError {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         self.__description().fmt(fmt)
     }
 }
 
-#[unstable(feature = "try_from", issue = "33417")]
+#[stable(feature = "try_from", since = "1.34.0")]
+impl From<Infallible> for TryFromIntError {
+    fn from(x: Infallible) -> TryFromIntError {
+        match x {}
+    }
+}
+
+#[unstable(feature = "never_type", issue = "35121")]
 impl From<!> for TryFromIntError {
     fn from(never: !) -> TryFromIntError {
-        never
+        // Match rather than coerce to make sure that code like
+        // `From<Infallible> for TryFromIntError` above will keep working
+        // when `Infallible` becomes an alias to `!`.
+        match never {}
     }
 }
 
 // no possible bounds violation
 macro_rules! try_from_unbounded {
     ($source:ty, $($target:ty),*) => {$(
-        #[unstable(feature = "try_from", issue = "33417")]
+        #[stable(feature = "try_from", since = "1.34.0")]
         impl TryFrom<$source> for $target {
             type Error = TryFromIntError;
 
@@ -4555,7 +4555,7 @@ macro_rules! try_from_unbounded {
 // only negative bounds
 macro_rules! try_from_lower_bounded {
     ($source:ty, $($target:ty),*) => {$(
-        #[unstable(feature = "try_from", issue = "33417")]
+        #[stable(feature = "try_from", since = "1.34.0")]
         impl TryFrom<$source> for $target {
             type Error = TryFromIntError;
 
@@ -4574,7 +4574,7 @@ macro_rules! try_from_lower_bounded {
 // unsigned to signed (only positive bound)
 macro_rules! try_from_upper_bounded {
     ($source:ty, $($target:ty),*) => {$(
-        #[unstable(feature = "try_from", issue = "33417")]
+        #[stable(feature = "try_from", since = "1.34.0")]
         impl TryFrom<$source> for $target {
             type Error = TryFromIntError;
 
@@ -4593,7 +4593,7 @@ macro_rules! try_from_upper_bounded {
 // all other cases
 macro_rules! try_from_both_bounded {
     ($source:ty, $($target:ty),*) => {$(
-        #[unstable(feature = "try_from", issue = "33417")]
+        #[stable(feature = "try_from", since = "1.34.0")]
         impl TryFrom<$source> for $target {
             type Error = TryFromIntError;
 

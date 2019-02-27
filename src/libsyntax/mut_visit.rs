@@ -581,9 +581,8 @@ pub fn noop_visit_token<T: MutVisitor>(t: &mut Token, vis: &mut T) {
         token::Ident(id, _is_raw) => vis.visit_ident(id),
         token::Lifetime(id) => vis.visit_ident(id),
         token::Interpolated(nt) => {
-            let nt = Lrc::make_mut(nt);
-            vis.visit_interpolated(&mut nt.0);
-            nt.1 = token::LazyTokenStream::new();
+            let mut nt = Lrc::make_mut(nt);
+            vis.visit_interpolated(&mut nt);
         }
         _ => {}
     }
@@ -1037,7 +1036,7 @@ pub fn noop_visit_pat<T: MutVisitor>(pat: &mut P<Pat>, vis: &mut T) {
             vis.visit_expr(e1);
             vis.visit_expr(e2);
             vis.visit_span(span);
-        },
+        }
         PatKind::Slice(before, slice, after) => {
             visit_vec(before, |pat| vis.visit_pat(pat));
             visit_opt(slice, |slice| vis.visit_pat(slice));

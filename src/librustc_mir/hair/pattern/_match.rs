@@ -168,11 +168,11 @@ use super::{PatternFoldable, PatternFolder, compare_const_vals};
 
 use rustc::hir::def_id::DefId;
 use rustc::hir::RangeEnd;
-use rustc::ty::{self, Ty, TyCtxt, TypeFoldable, Const};
+use rustc::ty::{self, subst::SubstsRef, Ty, TyCtxt, TypeFoldable, Const};
 use rustc::ty::layout::{Integer, IntegerExt, VariantIdx, Size};
 
 use rustc::mir::Field;
-use rustc::mir::interpret::{ConstValue, Pointer, Scalar};
+use rustc::mir::interpret::{ConstValue, Scalar};
 use rustc::util::common::ErrorReported;
 
 use syntax::attr::{SignedInt, UnsignedInt};
@@ -214,9 +214,8 @@ impl<'a, 'tcx> LiteralExpander<'a, 'tcx> {
         match (val, &crty.sty, &rty.sty) {
             // the easy case, deref a reference
             (ConstValue::Scalar(Scalar::Ptr(p)), x, y) if x == y => ConstValue::ByRef(
-                p.alloc_id,
+                p,
                 self.tcx.alloc_map.lock().unwrap_memory(p.alloc_id),
-                p.offset,
             ),
             // unsize array to slice if pattern is array but match value or other patterns are slice
             (ConstValue::Scalar(Scalar::Ptr(p)), ty::Array(t, n), ty::Slice(u)) => {
@@ -403,7 +402,7 @@ impl<'a, 'tcx> MatchCheckCtxt<'a, 'tcx> {
 
     fn is_variant_uninhabited(&self,
                               variant: &'tcx ty::VariantDef,
-                              substs: &'tcx ty::subst::Substs<'tcx>)
+                              substs: SubstsRef<'tcx>)
                               -> bool
     {
         if self.tcx.features().exhaustive_patterns {
@@ -634,8 +633,8 @@ impl<'tcx> Witness<'tcx> {
 /// but is instead bounded by the maximum fixed length of slice patterns in
 /// the column of patterns being analyzed.
 ///
-/// We make sure to omit constructors that are statically impossible. eg for
-/// Option<!> we do not include Some(_) in the returned list of constructors.
+/// We make sure to omit constructors that are statically impossible. E.g., for
+/// `Option<!>`, we do not include `Some(_)` in the returned list of constructors.
 fn all_constructors<'a, 'tcx: 'a>(cx: &mut MatchCheckCtxt<'a, 'tcx>,
                                   pcx: PatternContext<'tcx>)
                                   -> Vec<Constructor<'tcx>>
@@ -1347,7 +1346,7 @@ fn pat_constructors<'tcx>(cx: &mut MatchCheckCtxt<'_, 'tcx>,
 /// This computes the arity of a constructor. The arity of a constructor
 /// is how many subpattern patterns of that constructor should be expanded to.
 ///
-/// For instance, a tuple pattern (_, 42, Some([])) has the arity of 3.
+/// For instance, a tuple pattern `(_, 42, Some([]))` has the arity of 3.
 /// A struct pattern's arity is the number of fields it contains, etc.
 fn constructor_arity(cx: &MatchCheckCtxt<'a, 'tcx>, ctor: &Constructor<'tcx>, ty: Ty<'tcx>) -> u64 {
     debug!("constructor_arity({:#?}, {:?})", ctor, ty);
@@ -1357,7 +1356,7 @@ fn constructor_arity(cx: &MatchCheckCtxt<'a, 'tcx>, ctor: &Constructor<'tcx>, ty
             Slice(length) => length,
             ConstantValue(_) => 0,
             _ => bug!("bad slice pattern {:?} {:?}", ctor, ty)
-        },
+        }
         ty::Ref(..) => 1,
         ty::Adt(adt, _) => {
             adt.variants[ctor.variant_index_for_adt(cx, adt)].fields.len() as u64
@@ -1381,7 +1380,7 @@ fn constructor_sub_pattern_tys<'a, 'tcx: 'a>(cx: &MatchCheckCtxt<'a, 'tcx>,
             Slice(length) => (0..length).map(|_| ty).collect(),
             ConstantValue(_) => vec![],
             _ => bug!("bad slice pattern {:?} {:?}", ctor, ty)
-        },
+        }
         ty::Ref(_, rty, _) => vec![rty],
         ty::Adt(adt, substs) => {
             if adt.is_box() {
@@ -1428,7 +1427,7 @@ fn slice_pat_covered_by_const<'tcx>(
     suffix: &[Pattern<'tcx>]
 ) -> Result<bool, ErrorReported> {
     let data: &[u8] = match (const_val.val, &const_val.ty.sty) {
-        (ConstValue::ByRef(id, alloc, offset), ty::Array(t, n)) => {
+        (ConstValue::ByRef(ptr, alloc), ty::Array(t, n)) => {
             if *t != tcx.types.u8 {
                 // FIXME(oli-obk): can't mix const patterns with slice patterns and get
                 // any sort of exhaustiveness/unreachable check yet
@@ -1436,7 +1435,6 @@ fn slice_pat_covered_by_const<'tcx>(
                 // are definitely unreachable.
                 return Ok(false);
             }
-            let ptr = Pointer::new(id, offset);
             let n = n.assert_usize(tcx).unwrap();
             alloc.get_bytes(&tcx, ptr, Size::from_bytes(n)).unwrap()
         },
@@ -1778,8 +1776,8 @@ fn specialize<'p, 'a: 'p, 'tcx: 'a>(
                     let (opt_ptr, n, ty) = match value.ty.sty {
                         ty::TyKind::Array(t, n) => {
                             match value.val {
-                                ConstValue::ByRef(id, alloc, offset) => (
-                                    Some((Pointer::new(id, offset), alloc)),
+                                ConstValue::ByRef(ptr, alloc) => (
+                                    Some((ptr, alloc)),
                                     n.unwrap_usize(cx.tcx),
                                     t,
                                 ),
