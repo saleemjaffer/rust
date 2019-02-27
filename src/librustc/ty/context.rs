@@ -409,6 +409,7 @@ pub struct TypeckTables<'tcx> {
     /// MIR construction and hence is not serialized to metadata.
     fru_field_types: ItemLocalMap<Vec<Ty<'tcx>>>,
 
+    /// For every coercion cast we add the HIR node ID to this set.
     coercion_casts: ItemLocalSet,
 
     /// Set of trait imports actually used in the method resolution.
@@ -717,13 +718,10 @@ impl<'tcx> TypeckTables<'tcx> {
     }
 
     pub fn is_coercion_cast(&self, hir_id: &hir::HirId) -> bool {
-        if self.coercion_casts.contains(&hir_id.local_id) {
-            return true
-        }
-        false
+        self.coercion_casts.contains(&hir_id.local_id)
     }
 
-    pub fn set_coercion_cast(&mut self, hir_id: &hir::HirId) -> () {
+    pub fn set_coercion_cast(&mut self, hir_id: &hir::HirId) {
         self.coercion_casts.insert(hir_id.local_id);
     }
 
