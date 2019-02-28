@@ -409,7 +409,8 @@ pub struct TypeckTables<'tcx> {
     /// MIR construction and hence is not serialized to metadata.
     fru_field_types: ItemLocalMap<Vec<Ty<'tcx>>>,
 
-    /// For every coercion cast we add the HIR node ID to this set.
+    /// For every coercion cast we add the HIR node ID of the cast
+    /// expression to this set.
     coercion_casts: ItemLocalSet,
 
     /// Set of trait imports actually used in the method resolution.
