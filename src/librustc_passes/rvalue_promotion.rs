@@ -324,10 +324,6 @@ fn check_expr_kind<'a, 'tcx>(
             match (cast_in, cast_out) {
                 (Some(CastTy::FnPtr), Some(CastTy::Int(_))) |
                 (Some(CastTy::Ptr(_)), Some(CastTy::Int(_))) => NotPromotable,
-                (None, _) => {
-                    //v.tcx.sess.delay_span_bug(e.span, "no kind for cast");
-                    Promotable
-                },
                 (_, _) => expr_promotability
             }
         }

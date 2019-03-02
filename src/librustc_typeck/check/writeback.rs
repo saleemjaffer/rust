@@ -50,6 +50,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
         wbcx.visit_liberated_fn_sigs();
         wbcx.visit_fru_field_types();
         wbcx.visit_opaque_types(body.value.span);
+        wbcx.visit_cast_types();
         wbcx.visit_free_region_map();
         wbcx.visit_user_provided_tys();
         wbcx.visit_user_provided_sigs();
@@ -351,6 +352,23 @@ impl<'cx, 'gcx, 'tcx> WritebackCx<'cx, 'gcx, 'tcx> {
             self.tables
                 .closure_kind_origins_mut()
                 .insert(hir_id, origin);
+        }
+    }
+
+    fn visit_cast_types(&mut self) {
+        //let fcx_tables = self.fcx.tables.borrow();
+        use std::borrow::BorrowMut;
+        let fcx_tables = self.fcx.tables.borrow();
+        let fcx_coercion_casts = fcx_tables.coercion_casts();
+        //debug_assert_eq!(fcx_tables.local_id_root, self.tables.local_id_root);
+        //let mut self_coercion_casts = self.tables.coercion_casts_mut();
+        //let common_local_id_root = fcx_tables.local_id_root.unwrap();
+
+        //fcx.try_coerce(self.expr, self.expr_ty, self.cast_ty, AllowTwoPhase::No).is_ok()
+
+        for hir_id in fcx_coercion_casts.iter() {
+            //self_cast_kinds.insert(hir_id, cast_kind);
+            self.tables.borrow_mut().set_coercion_cast(hir_id);
         }
     }
 
