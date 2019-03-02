@@ -319,12 +319,16 @@ fn check_expr_kind<'a, 'tcx>(
         hir::ExprKind::Cast(ref from, _) => {
             let expr_promotability = v.check_expr(from);
             debug!("Checking const cast(id={})", from.hir_id);
-            let cast_in = CastTy::from_ty(v.tables.expr_ty(from)).expect("bad input type for cast");
-            match cast_in {
-                CastTy::FnPtr | CastTy::Ptr(_) => {
-                    NotPromotable
-                }
-                _ => expr_promotability
+            let cast_in = CastTy::from_ty(v.tables.expr_ty(from));
+            let cast_out = CastTy::from_ty(v.tables.expr_ty(e));
+            match (cast_in, cast_out) {
+                (Some(CastTy::FnPtr), Some(CastTy::Int(_))) |
+                (Some(CastTy::Ptr(_)), Some(CastTy::Int(_))) => NotPromotable,
+                (None, _) => {
+                    //v.tcx.sess.delay_span_bug(e.span, "no kind for cast");
+                    Promotable
+                },
+                (_, _) => expr_promotability
             }
         }
         hir::ExprKind::Path(ref qpath) => {
