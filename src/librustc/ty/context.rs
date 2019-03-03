@@ -722,8 +722,8 @@ impl<'tcx> TypeckTables<'tcx> {
         self.coercion_casts.contains(&hir_id.local_id)
     }
 
-    pub fn set_coercion_cast(&mut self, id: &ItemLocalId) {
-        self.coercion_casts.insert(*id);
+    pub fn set_coercion_cast(&mut self, hir_id: &hir::HirId) {
+        self.coercion_casts.insert(hir_id.local_id);
     }
 
     pub fn coercion_casts(&self) -> &ItemLocalSet {
