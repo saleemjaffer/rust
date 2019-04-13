@@ -210,7 +210,7 @@ impl<T> Option<T> {
     // Adapter for working with references
     /////////////////////////////////////////////////////////////////////////
 
-    /// Converts from `Option<T>` to `Option<&T>`.
+    /// Converts from `&Option<T>` to `Option<&T>`.
     ///
     /// # Examples
     ///
@@ -239,7 +239,7 @@ impl<T> Option<T> {
         }
     }
 
-    /// Converts from `Option<T>` to `Option<&mut T>`.
+    /// Converts from `&mut Option<T>` to `Option<&mut T>`.
     ///
     /// # Examples
     ///
@@ -874,49 +874,45 @@ impl<T> Option<T> {
     }
 }
 
-impl<'a, T: Copy> Option<&'a T> {
+impl<T: Copy> Option<&T> {
     /// Maps an `Option<&T>` to an `Option<T>` by copying the contents of the
     /// option.
     ///
     /// # Examples
     ///
     /// ```
-    /// #![feature(copied)]
-    ///
     /// let x = 12;
     /// let opt_x = Some(&x);
     /// assert_eq!(opt_x, Some(&12));
     /// let copied = opt_x.copied();
     /// assert_eq!(copied, Some(12));
     /// ```
-    #[unstable(feature = "copied", issue = "57126")]
+    #[stable(feature = "copied", since = "1.35.0")]
     pub fn copied(self) -> Option<T> {
         self.map(|&t| t)
     }
 }
 
-impl<'a, T: Copy> Option<&'a mut T> {
+impl<T: Copy> Option<&mut T> {
     /// Maps an `Option<&mut T>` to an `Option<T>` by copying the contents of the
     /// option.
     ///
     /// # Examples
     ///
     /// ```
-    /// #![feature(copied)]
-    ///
     /// let mut x = 12;
     /// let opt_x = Some(&mut x);
     /// assert_eq!(opt_x, Some(&mut 12));
     /// let copied = opt_x.copied();
     /// assert_eq!(copied, Some(12));
     /// ```
-    #[unstable(feature = "copied", issue = "57126")]
+    #[stable(feature = "copied", since = "1.35.0")]
     pub fn copied(self) -> Option<T> {
         self.map(|&mut t| t)
     }
 }
 
-impl<'a, T: Clone> Option<&'a T> {
+impl<T: Clone> Option<&T> {
     /// Maps an `Option<&T>` to an `Option<T>` by cloning the contents of the
     /// option.
     ///
@@ -935,7 +931,7 @@ impl<'a, T: Clone> Option<&'a T> {
     }
 }
 
-impl<'a, T: Clone> Option<&'a mut T> {
+impl<T: Clone> Option<&mut T> {
     /// Maps an `Option<&mut T>` to an `Option<T>` by cloning the contents of the
     /// option.
     ///
@@ -1286,7 +1282,7 @@ impl<A, V: FromIterator<A>> FromIterator<Option<A>> for Option<V> {
     /// # Examples
     ///
     /// Here is an example which increments every integer in a vector.
-    /// `We use the checked variant of `add` that returns `None` when the
+    /// We use the checked variant of `add` that returns `None` when the
     /// calculation would result in an overflow.
     ///
     /// ```

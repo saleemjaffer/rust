@@ -1,16 +1,16 @@
-use fmt;
-use hash;
-use io;
-use mem;
-use net::{ntoh, hton, IpAddr, Ipv4Addr, Ipv6Addr};
-use option;
-use sys::net::netc as c;
-use sys_common::{FromInner, AsInner, IntoInner};
-use sys_common::net::LookupHost;
-use vec;
-use iter;
-use slice;
-use convert::TryInto;
+use crate::fmt;
+use crate::hash;
+use crate::io;
+use crate::mem;
+use crate::net::{ntoh, hton, IpAddr, Ipv4Addr, Ipv6Addr};
+use crate::option;
+use crate::sys::net::netc as c;
+use crate::sys_common::{FromInner, AsInner, IntoInner};
+use crate::sys_common::net::LookupHost;
+use crate::vec;
+use crate::iter;
+use crate::slice;
+use crate::convert::TryInto;
 
 /// An internet socket address, either IPv4 or IPv6.
 ///
@@ -861,7 +861,7 @@ fn resolve_socket_addr(lh: LookupHost) -> io::Result<vec::IntoIter<SocketAddr>> 
 }
 
 #[stable(feature = "rust1", since = "1.0.0")]
-impl<'a> ToSocketAddrs for (&'a str, u16) {
+impl ToSocketAddrs for (&str, u16) {
     type Iter = vec::IntoIter<SocketAddr>;
     fn to_socket_addrs(&self) -> io::Result<vec::IntoIter<SocketAddr>> {
         let (host, port) = *self;
@@ -904,7 +904,7 @@ impl<'a> ToSocketAddrs for &'a [SocketAddr] {
 }
 
 #[stable(feature = "rust1", since = "1.0.0")]
-impl<'a, T: ToSocketAddrs + ?Sized> ToSocketAddrs for &'a T {
+impl<T: ToSocketAddrs + ?Sized> ToSocketAddrs for &T {
     type Iter = T::Iter;
     fn to_socket_addrs(&self) -> io::Result<T::Iter> {
         (**self).to_socket_addrs()
@@ -921,8 +921,8 @@ impl ToSocketAddrs for String {
 
 #[cfg(all(test, not(target_os = "emscripten")))]
 mod tests {
-    use net::*;
-    use net::test::{tsa, sa6, sa4};
+    use crate::net::*;
+    use crate::net::test::{tsa, sa6, sa4};
 
     #[test]
     fn to_socket_addr_ipaddr_u16() {
@@ -941,7 +941,10 @@ mod tests {
         assert_eq!(Ok(vec![a]), tsa(("2a02:6b8:0:1::1", 53)));
 
         let a = sa4(Ipv4Addr::new(127, 0, 0, 1), 23924);
+        #[cfg(not(target_env = "sgx"))]
         assert!(tsa(("localhost", 23924)).unwrap().contains(&a));
+        #[cfg(target_env = "sgx")]
+        let _ = a;
     }
 
     #[test]
@@ -953,7 +956,10 @@ mod tests {
         assert_eq!(Ok(vec![a]), tsa("[2a02:6b8:0:1::1]:53"));
 
         let a = sa4(Ipv4Addr::new(127, 0, 0, 1), 23924);
+        #[cfg(not(target_env = "sgx"))]
         assert!(tsa("localhost:23924").unwrap().contains(&a));
+        #[cfg(target_env = "sgx")]
+        let _ = a;
     }
 
     #[test]

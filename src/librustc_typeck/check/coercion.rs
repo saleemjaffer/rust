@@ -101,7 +101,7 @@ fn coerce_mutbls<'tcx>(from_mutbl: hir::Mutability,
     }
 }
 
-fn identity(_: Ty) -> Vec<Adjustment> { vec![] }
+fn identity(_: Ty<'_>) -> Vec<Adjustment<'_>> { vec![] }
 
 fn simple<'tcx>(kind: Adjust<'tcx>) -> impl FnOnce(Ty<'tcx>) -> Vec<Adjustment<'tcx>> {
     move |target| vec![Adjustment { kind, target }]
@@ -712,9 +712,9 @@ impl<'f, 'gcx, 'tcx> Coerce<'f, 'gcx, 'tcx> {
 
         let b = self.shallow_resolve(b);
 
-        let node_id_a = self.tcx.hir().as_local_node_id(def_id_a).unwrap();
+        let hir_id_a = self.tcx.hir().as_local_hir_id(def_id_a).unwrap();
         match b.sty {
-            ty::FnPtr(_) if self.tcx.with_freevars(node_id_a, |v| v.is_empty()) => {
+            ty::FnPtr(_) if self.tcx.with_freevars(hir_id_a, |v| v.is_empty()) => {
                 // We coerce the closure, which has fn type
                 //     `extern "rust-call" fn((arg0,arg1,...)) -> _`
                 // to
@@ -783,6 +783,10 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
         let source = self.resolve_type_vars_with_obligations(expr_ty);
         debug!("coercion::try({:?}: {:?} -> {:?})", expr, source, target);
 
+        dbg!(expr);
+        dbg!(source);
+        dbg!(target);
+
         let cause = self.cause(expr.span, ObligationCauseCode::ExprAssignable);
         let coerce = Coerce::new(self, cause, allow_two_phase);
         let ok = self.commit_if_ok(|_| coerce.coerce(source, target))?;
@@ -823,7 +827,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
         debug!("coercion::try_find_coercion_lub({:?}, {:?})", prev_ty, new_ty);
 
         // Special-case that coercion alone cannot handle:
-        // Two function item types of differing IDs or Substs.
+        // Two function item types of differing IDs or InternalSubsts.
         if let (&ty::FnDef(..), &ty::FnDef(..)) = (&prev_ty.sty, &new_ty.sty) {
             // Don't reify if the function types have a LUB, i.e., they
             // are the same function and their parameters have a LUB.
@@ -876,6 +880,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
             match result {
                 Ok(ok) => {
                     let (adjustments, target) = self.register_infer_ok_obligations(ok);
+                    dbg!("&*&*&*&*&*&*");
                     self.apply_adjustments(new, adjustments);
                     return Ok(target);
                 }
@@ -888,6 +893,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
         // previous expressions, other than noop reborrows (ignoring lifetimes).
         for expr in exprs {
             let expr = expr.as_coercion_site();
+            dbg!(expr);
             let noop = match self.tables.borrow().expr_adjustments(expr) {
                 &[
                     Adjustment { kind: Adjust::Deref(_), .. },
@@ -896,6 +902,8 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                     match self.node_ty(expr.hir_id).sty {
                         ty::Ref(_, _, mt_orig) => {
                             let mutbl_adj: hir::Mutability = mutbl_adj.into();
+                            dbg!(mutbl_adj);
+                            dbg!(mt_orig);
                             // Reborrow that we can safely ignore, because
                             // the next adjustment can only be a Deref
                             // which will be merged into it.
@@ -916,6 +924,8 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
             }
         }
 
+        dbg!(prev_ty);
+        dbg!(new_ty);
         match self.commit_if_ok(|_| coerce.coerce(prev_ty, new_ty)) {
             Err(_) => {
                 // Avoid giving strange errors on failed attempts.
@@ -932,6 +942,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                 let (adjustments, target) = self.register_infer_ok_obligations(ok);
                 for expr in exprs {
                     let expr = expr.as_coercion_site();
+                    dbg!("gggGgggggg");
                     self.apply_adjustments(expr, adjustments.clone());
                 }
                 Ok(target)
@@ -1084,7 +1095,7 @@ impl<'gcx, 'tcx, 'exprs, E> CoerceMany<'gcx, 'tcx, 'exprs, E>
     pub fn coerce_forced_unit<'a>(&mut self,
                                   fcx: &FnCtxt<'a, 'gcx, 'tcx>,
                                   cause: &ObligationCause<'tcx>,
-                                  augment_error: &mut dyn FnMut(&mut DiagnosticBuilder),
+                                  augment_error: &mut dyn FnMut(&mut DiagnosticBuilder<'_>),
                                   label_unit_as_expected: bool)
     {
         self.coerce_inner(fcx,
@@ -1103,7 +1114,7 @@ impl<'gcx, 'tcx, 'exprs, E> CoerceMany<'gcx, 'tcx, 'exprs, E>
                         cause: &ObligationCause<'tcx>,
                         expression: Option<&'gcx hir::Expr>,
                         mut expression_ty: Ty<'tcx>,
-                        augment_error: Option<&mut dyn FnMut(&mut DiagnosticBuilder)>,
+                        augment_error: Option<&mut dyn FnMut(&mut DiagnosticBuilder<'_>)>,
                         label_expression_as_expected: bool)
     {
         // Incorporate whatever type inference information we have
@@ -1128,8 +1139,12 @@ impl<'gcx, 'tcx, 'exprs, E> CoerceMany<'gcx, 'tcx, 'exprs, E>
                 // Special-case the first expression we are coercing.
                 // To be honest, I'm not entirely sure why we do this.
                 // We don't allow two-phase borrows, see comment in try_find_coercion_lub for why
+                dbg!("#################");
+                dbg!(expression_ty);
+                dbg!(self.expected_ty);
                 fcx.try_coerce(expression, expression_ty, self.expected_ty, AllowTwoPhase::No)
             } else {
+                dbg!("pushed is 1");
                 match self.expressions {
                     Expressions::Dynamic(ref exprs) =>
                         fcx.try_find_coercion_lub(cause,
@@ -1159,6 +1174,7 @@ impl<'gcx, 'tcx, 'exprs, E> CoerceMany<'gcx, 'tcx, 'exprs, E>
             // `expression_ty` will be unit).
             //
             // Another example is `break` with no argument expression.
+            dbg!("ELSE");
             assert!(expression_ty.is_unit(), "if let hack without unit type");
             fcx.at(cause, fcx.param_env)
                .eq_exp(label_expression_as_expected, expression_ty, self.merged_ty())
@@ -1170,6 +1186,10 @@ impl<'gcx, 'tcx, 'exprs, E> CoerceMany<'gcx, 'tcx, 'exprs, E>
 
         match result {
             Ok(v) => {
+                dbg!(expression);
+                dbg!(expression_ty);
+                dbg!(self.expected_ty);
+                dbg!(v);
                 self.final_ty = Some(v);
                 if let Some(e) = expression {
                     match self.expressions {
@@ -1177,7 +1197,8 @@ impl<'gcx, 'tcx, 'exprs, E> CoerceMany<'gcx, 'tcx, 'exprs, E>
                         Expressions::UpFront(coercion_sites) => {
                             // if the user gave us an array to validate, check that we got
                             // the next expression in the list, as expected
-                            assert_eq!(coercion_sites[self.pushed].as_coercion_site().id, e.id);
+                            assert_eq!(coercion_sites[self.pushed].as_coercion_site().hir_id,
+                                       e.hir_id);
                         }
                     }
                     self.pushed += 1;
@@ -1208,7 +1229,7 @@ impl<'gcx, 'tcx, 'exprs, E> CoerceMany<'gcx, 'tcx, 'exprs, E>
                         db.span_label(cause.span, "return type is not `()`");
                     }
                     ObligationCauseCode::BlockTailExpression(blk_id) => {
-                        let parent_id = fcx.tcx.hir().get_parent_node(blk_id);
+                        let parent_id = fcx.tcx.hir().get_parent_node_by_hir_id(blk_id);
                         db = self.report_return_mismatched_types(
                             cause,
                             expected,
@@ -1246,8 +1267,8 @@ impl<'gcx, 'tcx, 'exprs, E> CoerceMany<'gcx, 'tcx, 'exprs, E>
         found: Ty<'tcx>,
         err: TypeError<'tcx>,
         fcx: &FnCtxt<'a, 'gcx, 'tcx>,
-        id: syntax::ast::NodeId,
-        expression: Option<(&'gcx hir::Expr, syntax::ast::NodeId)>,
+        id: hir::HirId,
+        expression: Option<(&'gcx hir::Expr, hir::HirId)>,
     ) -> DiagnosticBuilder<'a> {
         let mut db = fcx.report_mismatched_types(cause, expected, found, err);
 
@@ -1257,7 +1278,7 @@ impl<'gcx, 'tcx, 'exprs, E> CoerceMany<'gcx, 'tcx, 'exprs, E>
         // Verify that this is a tail expression of a function, otherwise the
         // label pointing out the cause for the type coercion will be wrong
         // as prior return coercions would not be relevant (#57664).
-        let parent_id = fcx.tcx.hir().get_parent_node(id);
+        let parent_id = fcx.tcx.hir().get_parent_node_by_hir_id(id);
         let fn_decl = if let Some((expr, blk_id)) = expression {
             pointing_at_return_type = fcx.suggest_mismatched_types_on_tail(
                 &mut db,
@@ -1267,7 +1288,7 @@ impl<'gcx, 'tcx, 'exprs, E> CoerceMany<'gcx, 'tcx, 'exprs, E>
                 cause.span,
                 blk_id,
             );
-            let parent = fcx.tcx.hir().get(parent_id);
+            let parent = fcx.tcx.hir().get_by_hir_id(parent_id);
             fcx.get_node_fn_decl(parent).map(|(fn_decl, _, is_main)| (fn_decl, is_main))
         } else {
             fcx.get_fn_decl(parent_id)

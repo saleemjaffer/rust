@@ -9,9 +9,9 @@
 #![allow(missing_docs)]
 
 #[cfg(not(test))]
-use intrinsics;
+use crate::intrinsics;
 #[cfg(not(test))]
-use sys::cmath;
+use crate::sys::cmath;
 
 #[stable(feature = "rust1", since = "1.0.0")]
 pub use core::f64::{RADIX, MANTISSA_DIGITS, DIGITS, EPSILON};
@@ -32,11 +32,13 @@ impl f64 {
     /// # Examples
     ///
     /// ```
-    /// let f = 3.99_f64;
+    /// let f = 3.7_f64;
     /// let g = 3.0_f64;
+    /// let h = -3.7_f64;
     ///
     /// assert_eq!(f.floor(), 3.0);
     /// assert_eq!(g.floor(), 3.0);
+    /// assert_eq!(h.floor(), -4.0);
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
     #[inline]
@@ -84,11 +86,13 @@ impl f64 {
     /// # Examples
     ///
     /// ```
-    /// let f = 3.3_f64;
-    /// let g = -3.7_f64;
+    /// let f = 3.7_f64;
+    /// let g = 3.0_f64;
+    /// let h = -3.7_f64;
     ///
     /// assert_eq!(f.trunc(), 3.0);
-    /// assert_eq!(g.trunc(), -3.0);
+    /// assert_eq!(g.trunc(), 3.0);
+    /// assert_eq!(h.trunc(), -3.0);
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
     #[inline]
@@ -436,7 +440,7 @@ impl f64 {
     pub fn log2(self) -> f64 {
         self.log_wrapper(|n| {
             #[cfg(target_os = "android")]
-            return ::sys::android::log2f64(n);
+            return crate::sys::android::log2f64(n);
             #[cfg(not(target_os = "android"))]
             return unsafe { intrinsics::log2f64(n) };
         })
@@ -878,6 +882,28 @@ impl f64 {
         0.5 * ((2.0 * self) / (1.0 - self)).ln_1p()
     }
 
+    /// Returns max if self is greater than max, and min if self is less than min.
+    /// Otherwise this returns self.  Panics if min > max, min equals NaN, or max equals NaN.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// #![feature(clamp)]
+    /// assert!((-3.0f64).clamp(-2.0f64, 1.0f64) == -2.0f64);
+    /// assert!((0.0f64).clamp(-2.0f64, 1.0f64) == 0.0f64);
+    /// assert!((2.0f64).clamp(-2.0f64, 1.0f64) == 1.0f64);
+    /// assert!((std::f64::NAN).clamp(-2.0f64, 1.0f64).is_nan());
+    /// ```
+    #[unstable(feature = "clamp", issue = "44095")]
+    #[inline]
+    pub fn clamp(self, min: f64, max: f64) -> f64 {
+        assert!(min <= max);
+        let mut x = self;
+        if x < min { x = min; }
+        if x > max { x = max; }
+        x
+    }
+
     // Solaris/Illumos requires a wrapper around log, log2, and log10 functions
     // because of their non-standard behavior (e.g., log(-n) returns -Inf instead
     // of expected NaN).
@@ -906,10 +932,10 @@ impl f64 {
 
 #[cfg(test)]
 mod tests {
-    use f64;
-    use f64::*;
-    use num::*;
-    use num::FpCategory as Fp;
+    use crate::f64;
+    use crate::f64::*;
+    use crate::num::*;
+    use crate::num::FpCategory as Fp;
 
     #[test]
     fn test_num_f64() {
@@ -1496,5 +1522,23 @@ mod tests {
 
         assert_eq!(f64::from_bits(masked_nan1).to_bits(), masked_nan1);
         assert_eq!(f64::from_bits(masked_nan2).to_bits(), masked_nan2);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_clamp_min_greater_than_max() {
+        1.0f64.clamp(3.0, 1.0);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_clamp_min_is_nan() {
+        1.0f64.clamp(NAN, 1.0);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_clamp_max_is_nan() {
+        1.0f64.clamp(3.0, NAN);
     }
 }

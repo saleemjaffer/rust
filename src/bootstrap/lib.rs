@@ -103,7 +103,7 @@
 //! More documentation can be found in each respective module below, and you can
 //! also check out the `src/bootstrap/README.md` file for more information.
 
-#![deny(bare_trait_objects)]
+#![deny(rust_2018_idioms)]
 #![deny(warnings)]
 #![feature(core_intrinsics)]
 #![feature(drain_filter)]
@@ -114,22 +114,10 @@ extern crate build_helper;
 extern crate serde_derive;
 #[macro_use]
 extern crate lazy_static;
-extern crate serde_json;
-extern crate cmake;
-extern crate filetime;
-extern crate cc;
-extern crate getopts;
-extern crate num_cpus;
-extern crate toml;
-extern crate time;
-extern crate petgraph;
 
 #[cfg(test)]
 #[macro_use]
 extern crate pretty_assertions;
-
-#[cfg(unix)]
-extern crate libc;
 
 use std::cell::{RefCell, Cell};
 use std::collections::{HashSet, HashMap};
@@ -176,8 +164,6 @@ mod job;
 
 #[cfg(all(unix, not(target_os = "haiku")))]
 mod job {
-    use libc;
-
     pub unsafe fn setup(build: &mut crate::Build) {
         if build.config.low_priority {
             libc::setpriority(libc::PRIO_PGRP as _, 0, 10);
@@ -255,6 +241,8 @@ pub struct Build {
     clippy_info: channel::GitInfo,
     miri_info: channel::GitInfo,
     rustfmt_info: channel::GitInfo,
+    in_tree_llvm_info: channel::GitInfo,
+    emscripten_llvm_info: channel::GitInfo,
     local_rebuild: bool,
     fail_fast: bool,
     doc_tests: DocTests,
@@ -377,6 +365,8 @@ impl Build {
         let clippy_info = channel::GitInfo::new(&config, &src.join("src/tools/clippy"));
         let miri_info = channel::GitInfo::new(&config, &src.join("src/tools/miri"));
         let rustfmt_info = channel::GitInfo::new(&config, &src.join("src/tools/rustfmt"));
+        let in_tree_llvm_info = channel::GitInfo::new(&config, &src.join("src/llvm-project"));
+        let emscripten_llvm_info = channel::GitInfo::new(&config, &src.join("src/llvm-emscripten"));
 
         let mut build = Build {
             initial_rustc: config.initial_rustc.clone(),
@@ -400,6 +390,8 @@ impl Build {
             clippy_info,
             miri_info,
             rustfmt_info,
+            in_tree_llvm_info,
+            emscripten_llvm_info,
             cc: HashMap::new(),
             cxx: HashMap::new(),
             ar: HashMap::new(),
@@ -730,6 +722,17 @@ impl Build {
     /// Prints a message if this build is configured in verbose mode.
     fn verbose(&self, msg: &str) {
         if self.is_verbose() {
+            println!("{}", msg);
+        }
+    }
+
+    pub fn is_verbose_than(&self, level: usize) -> bool {
+        self.verbosity > level
+    }
+
+    /// Prints a message if this build is configured in more verbose mode than `level`.
+    fn verbose_than(&self, level: usize, msg: &str) {
+        if self.is_verbose_than(level) {
             println!("{}", msg);
         }
     }
@@ -1143,7 +1146,7 @@ impl Build {
         ret
     }
 
-    fn read_stamp_file(&self, stamp: &Path) -> Vec<PathBuf> {
+    fn read_stamp_file(&self, stamp: &Path) -> Vec<(PathBuf, bool)> {
         if self.config.dry_run {
             return Vec::new();
         }
@@ -1156,8 +1159,9 @@ impl Build {
             if part.is_empty() {
                 continue
             }
-            let path = PathBuf::from(t!(str::from_utf8(part)));
-            paths.push(path);
+            let host = part[0] as char == 'h';
+            let path = PathBuf::from(t!(str::from_utf8(&part[1..])));
+            paths.push((path, host));
         }
         paths
     }
@@ -1165,6 +1169,7 @@ impl Build {
     /// Copies a file from `src` to `dst`
     pub fn copy(&self, src: &Path, dst: &Path) {
         if self.config.dry_run { return; }
+        self.verbose_than(1, &format!("Copy {:?} to {:?}", src, dst));
         let _ = fs::remove_file(&dst);
         let metadata = t!(src.symlink_metadata());
         if metadata.file_type().is_symlink() {

@@ -1,5 +1,3 @@
-#![cfg(not(miri))]
-
 use std::cell::Cell;
 use std::cmp::Ordering::{self, Equal, Greater, Less};
 use std::mem;
@@ -391,6 +389,7 @@ fn test_reverse() {
 }
 
 #[test]
+#[cfg(not(miri))] // Miri does not support entropy
 fn test_sort() {
     let mut rng = thread_rng();
 
@@ -467,6 +466,7 @@ fn test_sort() {
 }
 
 #[test]
+#[cfg(not(miri))] // Miri does not support entropy
 fn test_sort_stability() {
     for len in (2..25).chain(500..510) {
         for _ in 0..10 {
@@ -1397,6 +1397,7 @@ fn test_box_slice_clone() {
 #[test]
 #[allow(unused_must_use)] // here, we care about the side effects of `.clone()`
 #[cfg_attr(target_os = "emscripten", ignore)]
+#[cfg(not(miri))] // Miri does not support threads nor entropy
 fn test_box_slice_clone_panics() {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1588,6 +1589,7 @@ thread_local!(static SILENCE_PANIC: Cell<bool> = Cell::new(false));
 
 #[test]
 #[cfg_attr(target_os = "emscripten", ignore)] // no threads
+#[cfg(not(miri))] // Miri does not support threads nor entropy
 fn panic_safe() {
     let prev = panic::take_hook();
     panic::set_hook(Box::new(move |info| {

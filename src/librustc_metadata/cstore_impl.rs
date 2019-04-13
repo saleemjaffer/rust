@@ -407,6 +407,14 @@ impl cstore::CStore {
         self.get_crate_data(def.krate).get_struct_field_names(def.index)
     }
 
+    pub fn ctor_kind_untracked(&self, def: DefId) -> def::CtorKind {
+        self.get_crate_data(def.krate).get_ctor_kind(def.index)
+    }
+
+    pub fn item_attrs_untracked(&self, def: DefId, sess: &Session) -> Lrc<[ast::Attribute]> {
+        self.get_crate_data(def.krate).get_item_attrs(def.index, sess)
+    }
+
     pub fn item_children_untracked(&self, def_id: DefId, sess: &Session) -> Vec<def::Export> {
         let mut result = vec![];
         self.get_crate_data(def_id.krate)
@@ -439,8 +447,8 @@ impl cstore::CStore {
 
         let source_file = sess.parse_sess.source_map().new_source_file(source_name, def.body);
         let local_span = Span::new(source_file.start_pos, source_file.end_pos, NO_EXPANSION);
-        let (body, errors) = source_file_to_stream(&sess.parse_sess, source_file, None);
-        emit_unclosed_delims(&errors, &sess.diagnostic());
+        let (body, mut errors) = source_file_to_stream(&sess.parse_sess, source_file, None);
+        emit_unclosed_delims(&mut errors, &sess.diagnostic());
 
         // Mark the attrs as used
         let attrs = data.get_item_attrs(id.index, sess);

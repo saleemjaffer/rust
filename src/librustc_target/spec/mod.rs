@@ -259,6 +259,11 @@ impl ToJson for MergeFunctions {
     }
 }
 
+pub enum LoadTargetError {
+    BuiltinTargetNotFound(String),
+    Other(String),
+}
+
 pub type LinkArgs = BTreeMap<LinkerFlavor, Vec<String>>;
 pub type TargetResult = Result<Target, String>;
 
@@ -269,21 +274,24 @@ macro_rules! supported_targets {
         /// List of supported targets
         const TARGETS: &[&str] = &[$($triple),*];
 
-        fn load_specific(target: &str) -> TargetResult {
+        fn load_specific(target: &str) -> Result<Target, LoadTargetError> {
             match target {
                 $(
                     $triple => {
-                        let mut t = $module::target()?;
+                        let mut t = $module::target()
+                            .map_err(LoadTargetError::Other)?;
                         t.options.is_builtin = true;
 
                         // round-trip through the JSON parser to ensure at
                         // run-time that the parser works correctly
-                        t = Target::from_json(t.to_json())?;
+                        t = Target::from_json(t.to_json())
+                            .map_err(LoadTargetError::Other)?;
                         debug!("Got builtin target: {:?}", t);
                         Ok(t)
                     },
                 )+
-                _ => Err(format!("Unable to find target: {}", target))
+                    _ => Err(LoadTargetError::BuiltinTargetNotFound(
+                        format!("Unable to find target: {}", target)))
             }
         }
 
@@ -327,6 +335,10 @@ supported_targets! {
     ("mips-unknown-linux-gnu", mips_unknown_linux_gnu),
     ("mips64-unknown-linux-gnuabi64", mips64_unknown_linux_gnuabi64),
     ("mips64el-unknown-linux-gnuabi64", mips64el_unknown_linux_gnuabi64),
+    ("mipsisa32r6-unknown-linux-gnu", mipsisa32r6_unknown_linux_gnu),
+    ("mipsisa32r6el-unknown-linux-gnu", mipsisa32r6el_unknown_linux_gnu),
+    ("mipsisa64r6-unknown-linux-gnuabi64", mipsisa64r6_unknown_linux_gnuabi64),
+    ("mipsisa64r6el-unknown-linux-gnuabi64", mipsisa64r6el_unknown_linux_gnuabi64),
     ("mipsel-unknown-linux-gnu", mipsel_unknown_linux_gnu),
     ("powerpc-unknown-linux-gnu", powerpc_unknown_linux_gnu),
     ("powerpc-unknown-linux-gnuspe", powerpc_unknown_linux_gnuspe),
@@ -368,6 +380,8 @@ supported_targets! {
     ("aarch64-linux-android", aarch64_linux_android),
 
     ("aarch64-unknown-freebsd", aarch64_unknown_freebsd),
+    ("armv6-unknown-freebsd", armv6_unknown_freebsd),
+    ("armv7-unknown-freebsd", armv7_unknown_freebsd),
     ("i686-unknown-freebsd", i686_unknown_freebsd),
     ("powerpc64-unknown-freebsd", powerpc64_unknown_freebsd),
     ("x86_64-unknown-freebsd", x86_64_unknown_freebsd),
@@ -451,6 +465,8 @@ supported_targets! {
 
     ("riscv32imc-unknown-none-elf", riscv32imc_unknown_none_elf),
     ("riscv32imac-unknown-none-elf", riscv32imac_unknown_none_elf),
+    ("riscv64imac-unknown-none-elf", riscv64imac_unknown_none_elf),
+    ("riscv64gc-unknown-none-elf", riscv64gc_unknown_none_elf),
 
     ("aarch64-unknown-none", aarch64_unknown_none),
 
@@ -1174,8 +1190,10 @@ impl Target {
         match *target_triple {
             TargetTriple::TargetTriple(ref target_triple) => {
                 // check if triple is in list of supported targets
-                if let Ok(t) = load_specific(target_triple) {
-                    return Ok(t)
+                match load_specific(target_triple) {
+                    Ok(t) => return Ok(t),
+                    Err(LoadTargetError::BuiltinTargetNotFound(_)) => (),
+                    Err(LoadTargetError::Other(e)) => return Err(e),
                 }
 
                 // search for a file named `target_triple`.json in RUST_TARGET_PATH

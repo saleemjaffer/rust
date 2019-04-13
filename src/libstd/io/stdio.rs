@@ -1,17 +1,26 @@
-use io::prelude::*;
+#![cfg_attr(test, allow(unused))]
 
-use cell::RefCell;
-use fmt;
-use io::lazy::Lazy;
-use io::{self, Initializer, BufReader, LineWriter};
-use sync::{Arc, Mutex, MutexGuard};
-use sys::stdio;
-use sys_common::remutex::{ReentrantMutex, ReentrantMutexGuard};
-use thread::LocalKey;
+use crate::io::prelude::*;
 
-/// Stdout used by print! and println! macros
+use crate::cell::RefCell;
+use crate::fmt;
+use crate::io::lazy::Lazy;
+use crate::io::{self, Initializer, BufReader, LineWriter};
+use crate::sync::{Arc, Mutex, MutexGuard};
+use crate::sys::stdio;
+use crate::sys_common::remutex::{ReentrantMutex, ReentrantMutexGuard};
+use crate::thread::LocalKey;
+
 thread_local! {
+    /// Stdout used by print! and println! macros
     static LOCAL_STDOUT: RefCell<Option<Box<dyn Write + Send>>> = {
+        RefCell::new(None)
+    }
+}
+
+thread_local! {
+    /// Stderr used by eprint! and eprintln! macros, and panics
+    static LOCAL_STDERR: RefCell<Option<Box<dyn Write + Send>>> = {
         RefCell::new(None)
     }
 }
@@ -312,7 +321,7 @@ impl Read for Stdin {
 }
 
 #[stable(feature = "rust1", since = "1.0.0")]
-impl<'a> Read for StdinLock<'a> {
+impl Read for StdinLock<'_> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         self.inner.read(buf)
     }
@@ -323,13 +332,13 @@ impl<'a> Read for StdinLock<'a> {
 }
 
 #[stable(feature = "rust1", since = "1.0.0")]
-impl<'a> BufRead for StdinLock<'a> {
+impl BufRead for StdinLock<'_> {
     fn fill_buf(&mut self) -> io::Result<&[u8]> { self.inner.fill_buf() }
     fn consume(&mut self, n: usize) { self.inner.consume(n) }
 }
 
 #[stable(feature = "std_debug", since = "1.16.0")]
-impl<'a> fmt::Debug for StdinLock<'a> {
+impl fmt::Debug for StdinLock<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.pad("StdinLock { .. }")
     }
@@ -485,7 +494,7 @@ impl Write for Stdout {
     }
 }
 #[stable(feature = "rust1", since = "1.0.0")]
-impl<'a> Write for StdoutLock<'a> {
+impl Write for StdoutLock<'_> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.inner.borrow_mut().write(buf)
     }
@@ -495,7 +504,7 @@ impl<'a> Write for StdoutLock<'a> {
 }
 
 #[stable(feature = "std_debug", since = "1.16.0")]
-impl<'a> fmt::Debug for StdoutLock<'a> {
+impl fmt::Debug for StdoutLock<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.pad("StdoutLock { .. }")
     }
@@ -638,7 +647,7 @@ impl Write for Stderr {
     }
 }
 #[stable(feature = "rust1", since = "1.0.0")]
-impl<'a> Write for StderrLock<'a> {
+impl Write for StderrLock<'_> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.inner.borrow_mut().write(buf)
     }
@@ -648,7 +657,7 @@ impl<'a> Write for StderrLock<'a> {
 }
 
 #[stable(feature = "std_debug", since = "1.16.0")]
-impl<'a> fmt::Debug for StderrLock<'a> {
+impl fmt::Debug for StderrLock<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.pad("StderrLock { .. }")
     }
@@ -668,8 +677,7 @@ impl<'a> fmt::Debug for StderrLock<'a> {
            issue = "0")]
 #[doc(hidden)]
 pub fn set_panic(sink: Option<Box<dyn Write + Send>>) -> Option<Box<dyn Write + Send>> {
-    use panicking::LOCAL_STDERR;
-    use mem;
+    use crate::mem;
     LOCAL_STDERR.with(move |slot| {
         mem::replace(&mut *slot.borrow_mut(), sink)
     }).and_then(|mut s| {
@@ -692,7 +700,7 @@ pub fn set_panic(sink: Option<Box<dyn Write + Send>>) -> Option<Box<dyn Write + 
            issue = "0")]
 #[doc(hidden)]
 pub fn set_print(sink: Option<Box<dyn Write + Send>>) -> Option<Box<dyn Write + Send>> {
-    use mem;
+    use crate::mem;
     LOCAL_STDOUT.with(move |slot| {
         mem::replace(&mut *slot.borrow_mut(), sink)
     }).and_then(|mut s| {
@@ -740,6 +748,7 @@ where
            reason = "implementation detail which may disappear or be replaced at any time",
            issue = "0")]
 #[doc(hidden)]
+#[cfg(not(test))]
 pub fn _print(args: fmt::Arguments) {
     print_to(args, &LOCAL_STDOUT, stdout, "stdout");
 }
@@ -748,15 +757,18 @@ pub fn _print(args: fmt::Arguments) {
            reason = "implementation detail which may disappear or be replaced at any time",
            issue = "0")]
 #[doc(hidden)]
+#[cfg(not(test))]
 pub fn _eprint(args: fmt::Arguments) {
-    use panicking::LOCAL_STDERR;
     print_to(args, &LOCAL_STDERR, stderr, "stderr");
 }
 
 #[cfg(test)]
+pub use realstd::io::{_eprint, _print};
+
+#[cfg(test)]
 mod tests {
-    use panic::{UnwindSafe, RefUnwindSafe};
-    use thread;
+    use crate::panic::{UnwindSafe, RefUnwindSafe};
+    use crate::thread;
     use super::*;
 
     #[test]

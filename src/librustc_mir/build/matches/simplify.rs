@@ -19,6 +19,7 @@ use rustc::ty;
 use rustc::ty::layout::{Integer, IntegerExt, Size};
 use syntax::attr::{SignedInt, UnsignedInt};
 use rustc::hir::RangeEnd;
+use rustc::mir::interpret::truncate;
 
 use std::mem;
 
@@ -45,10 +46,10 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
         }
     }
 
-    /// Tries to simplify `match_pair`, returning true if
+    /// Tries to simplify `match_pair`, returning `Ok(())` if
     /// successful. If successful, new match pairs and bindings will
     /// have been pushed into the candidate. If no simplification is
-    /// possible, Err is returned and no changes are made to
+    /// possible, `Err` is returned and no changes are made to
     /// candidate.
     fn simplify_match_pair<'pat>(&mut self,
                                  match_pair: MatchPair<'pat, 'tcx>,
@@ -113,16 +114,14 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
                         (Some(('\u{0000}' as u128, '\u{10FFFF}' as u128, Size::from_bits(32))), 0)
                     }
                     ty::Int(ity) => {
-                        // FIXME(49937): refactor these bit manipulations into interpret.
                         let size = Integer::from_attr(&tcx, SignedInt(ity)).size();
-                        let max = !0u128 >> (128 - size.bits());
+                        let max = truncate(u128::max_value(), size);
                         let bias = 1u128 << (size.bits() - 1);
                         (Some((0, max, size)), bias)
                     }
                     ty::Uint(uty) => {
-                        // FIXME(49937): refactor these bit manipulations into interpret.
                         let size = Integer::from_attr(&tcx, UnsignedInt(uty)).size();
-                        let max = !0u128 >> (128 - size.bits());
+                        let max = truncate(u128::max_value(), size);
                         (Some((0, max, size)), 0)
                     }
                     _ => (None, 0),
@@ -164,7 +163,7 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
                     i == variant_index || {
                         self.hir.tcx().features().never_type &&
                         self.hir.tcx().features().exhaustive_patterns &&
-                        self.hir.tcx().is_variant_uninhabited_from_all_modules(v, substs)
+                        !v.uninhabited_from(self.hir.tcx(), substs, adt_def.adt_kind()).is_empty()
                     }
                 });
                 if irrefutable {
@@ -174,7 +173,7 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
                 } else {
                     Err(match_pair)
                 }
-            },
+            }
 
             PatternKind::Array { ref prefix, ref slice, ref suffix } => {
                 self.prefix_slice_suffix(&mut candidate.match_pairs,

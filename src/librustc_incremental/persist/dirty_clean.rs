@@ -36,16 +36,16 @@ const CFG: &str = "cfg";
 
 /// For typedef, constants, and statics
 const BASE_CONST: &[&str] = &[
-    label_strs::TypeOfItem,
+    label_strs::type_of,
 ];
 
 /// DepNodes for functions + methods
 const BASE_FN: &[&str] = &[
     // Callers will depend on the signature of these items, so we better test
     label_strs::FnSignature,
-    label_strs::GenericsOfItem,
-    label_strs::PredicatesOfItem,
-    label_strs::TypeOfItem,
+    label_strs::generics_of,
+    label_strs::predicates_of,
+    label_strs::type_of,
 
     // And a big part of compilation (that we eventually want to cache) is type inference
     // information:
@@ -62,7 +62,7 @@ const BASE_HIR: &[&str] = &[
 /// `impl` implementation of struct/trait
 const BASE_IMPL: &[&str] = &[
     label_strs::AssociatedItemDefIds,
-    label_strs::GenericsOfItem,
+    label_strs::generics_of,
     label_strs::ImplTraitRef,
 ];
 
@@ -78,17 +78,17 @@ const BASE_MIR: &[&str] = &[
 /// Note that changing the type of a field does not change the type of the struct or enum, but
 /// adding/removing fields or changing a fields name or visibility does.
 const BASE_STRUCT: &[&str] = &[
-    label_strs::GenericsOfItem,
-    label_strs::PredicatesOfItem,
-    label_strs::TypeOfItem,
+    label_strs::generics_of,
+    label_strs::predicates_of,
+    label_strs::type_of,
 ];
 
 /// Trait definition `DepNode`s.
 const BASE_TRAIT_DEF: &[&str] = &[
     label_strs::AssociatedItemDefIds,
-    label_strs::GenericsOfItem,
+    label_strs::generics_of,
     label_strs::ObjectSafety,
-    label_strs::PredicatesOfItem,
+    label_strs::predicates_of,
     label_strs::SpecializationGraph,
     label_strs::TraitDefOfItem,
     label_strs::TraitImpls,
@@ -179,7 +179,7 @@ const LABELS_TRAIT: &[&[&str]] = &[
 // Fields are kind of separate from their containers, as they can change independently from
 // them. We should at least check
 //
-//     TypeOfItem for these.
+//     type_of for these.
 
 type Labels = FxHashSet<String>;
 
@@ -241,7 +241,7 @@ pub struct DirtyCleanVisitor<'a, 'tcx:'a> {
 impl<'a, 'tcx> DirtyCleanVisitor<'a, 'tcx> {
 
     /// Possibly "deserialize" the attribute into a clean/dirty assertion
-    fn assertion_maybe(&mut self, item_id: ast::NodeId, attr: &Attribute)
+    fn assertion_maybe(&mut self, item_id: hir::HirId, attr: &Attribute)
         -> Option<Assertion>
     {
         let is_clean = if attr.check_name(ATTR_DIRTY) {
@@ -269,7 +269,7 @@ impl<'a, 'tcx> DirtyCleanVisitor<'a, 'tcx> {
     }
 
     /// Gets the "auto" assertion on pre-validated attr, along with the `except` labels.
-    fn assertion_auto(&mut self, item_id: ast::NodeId, attr: &Attribute, is_clean: bool)
+    fn assertion_auto(&mut self, item_id: hir::HirId, attr: &Attribute, is_clean: bool)
         -> Assertion
     {
         let (name, mut auto) = self.auto_labels(item_id, attr);
@@ -321,8 +321,8 @@ impl<'a, 'tcx> DirtyCleanVisitor<'a, 'tcx> {
 
     /// Return all DepNode labels that should be asserted for this item.
     /// index=0 is the "name" used for error messages
-    fn auto_labels(&mut self, item_id: ast::NodeId, attr: &Attribute) -> (&'static str, Labels) {
-        let node = self.tcx.hir().get(item_id);
+    fn auto_labels(&mut self, item_id: hir::HirId, attr: &Attribute) -> (&'static str, Labels) {
+        let node = self.tcx.hir().get_by_hir_id(item_id);
         let (name, labels) = match node {
             HirNode::Item(item) => {
                 match item.node {
@@ -430,13 +430,13 @@ impl<'a, 'tcx> DirtyCleanVisitor<'a, 'tcx> {
             if DepNode::has_label_string(label) {
                 if out.contains(label) {
                     self.tcx.sess.span_fatal(
-                        item.span,
+                        item.span(),
                         &format!("dep-node label `{}` is repeated", label));
                 }
                 out.insert(label.to_string());
             } else {
                 self.tcx.sess.span_fatal(
-                    item.span,
+                    item.span(),
                     &format!("dep-node label `{}` not recognized", label));
             }
         }
@@ -463,7 +463,7 @@ impl<'a, 'tcx> DirtyCleanVisitor<'a, 'tcx> {
         if let Some(def_id) = dep_node.extract_def_id(self.tcx) {
             format!("{:?}({})",
                     dep_node.kind,
-                    self.tcx.item_path_str(def_id))
+                    self.tcx.def_path_str(def_id))
         } else {
             format!("{:?}({:?})", dep_node.kind, dep_node.hash)
         }
@@ -499,8 +499,8 @@ impl<'a, 'tcx> DirtyCleanVisitor<'a, 'tcx> {
         }
     }
 
-    fn check_item(&mut self, item_id: ast::NodeId, item_span: Span) {
-        let def_id = self.tcx.hir().local_def_id(item_id);
+    fn check_item(&mut self, item_id: hir::HirId, item_span: Span) {
+        let def_id = self.tcx.hir().local_def_id_from_hir_id(item_id);
         for attr in self.tcx.get_attrs(def_id).iter() {
             let assertion = match self.assertion_maybe(item_id, attr) {
                 Some(a) => a,
@@ -519,15 +519,15 @@ impl<'a, 'tcx> DirtyCleanVisitor<'a, 'tcx> {
 
 impl<'a, 'tcx> ItemLikeVisitor<'tcx> for DirtyCleanVisitor<'a, 'tcx> {
     fn visit_item(&mut self, item: &'tcx hir::Item) {
-        self.check_item(item.id, item.span);
+        self.check_item(item.hir_id, item.span);
     }
 
     fn visit_trait_item(&mut self, item: &hir::TraitItem) {
-        self.check_item(item.id, item.span);
+        self.check_item(item.hir_id, item.span);
     }
 
     fn visit_impl_item(&mut self, item: &hir::ImplItem) {
-        self.check_item(item.id, item.span);
+        self.check_item(item.hir_id, item.span);
     }
 }
 
@@ -576,13 +576,13 @@ fn expect_associated_value(tcx: TyCtxt<'_, '_, '_>, item: &NestedMetaItem) -> as
     if let Some(value) = item.value_str() {
         value
     } else {
-        let msg = if let Some(name) = item.name() {
-            format!("associated value expected for `{}`", name)
+        let msg = if let Some(ident) = item.ident() {
+            format!("associated value expected for `{}`", ident)
         } else {
             "expected an associated value".to_string()
         };
 
-        tcx.sess.span_fatal(item.span, &msg);
+        tcx.sess.span_fatal(item.span(), &msg);
     }
 }
 

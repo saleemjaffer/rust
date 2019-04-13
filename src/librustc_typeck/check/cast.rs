@@ -37,9 +37,9 @@ use rustc::hir;
 use rustc::session::Session;
 use rustc::traits;
 use rustc::ty::{self, Ty, TypeFoldable, TypeAndMut};
+use rustc::ty::subst::SubstsRef;
 use rustc::ty::adjustment::AllowTwoPhase;
 use rustc::ty::cast::{CastKind, CastTy};
-use rustc::ty::subst::Substs;
 use rustc::middle::lang_items;
 use syntax::ast;
 use syntax_pos::Span;
@@ -69,7 +69,7 @@ enum PointerKind<'tcx> {
     /// The unsize info of this projection
     OfProjection(&'tcx ty::ProjectionTy<'tcx>),
     /// The unsize info of this opaque ty
-    OfOpaque(DefId, &'tcx Substs<'tcx>),
+    OfOpaque(DefId, SubstsRef<'tcx>),
     /// The unsize info of this parameter
     OfParam(&'tcx ty::ParamTy),
 }
@@ -399,9 +399,9 @@ impl<'a, 'gcx, 'tcx> CastCheck<'tcx> {
         } else {
             ("", lint::builtin::TRIVIAL_CASTS)
         };
-        let mut err = fcx.tcx.struct_span_lint_node(
+        let mut err = fcx.tcx.struct_span_lint_hir(
             lint,
-            self.expr.id,
+            self.expr.hir_id,
             self.span,
             &format!("trivial {}cast: `{}` as `{}`",
                      adjective,
@@ -416,8 +416,11 @@ impl<'a, 'gcx, 'tcx> CastCheck<'tcx> {
         self.expr_ty = fcx.structurally_resolved_type(self.span, self.expr_ty);
         self.cast_ty = fcx.structurally_resolved_type(self.span, self.cast_ty);
 
+        dbg!(self.expr.hir_id);
+        dbg!(self.expr_ty);
+        dbg!(self.cast_ty);
         debug!("check_cast({}, {:?} as {:?})",
-               self.expr.id,
+               self.expr.hir_id,
                self.expr_ty,
                self.cast_ty);
 
@@ -428,13 +431,12 @@ impl<'a, 'gcx, 'tcx> CastCheck<'tcx> {
         } else if self.try_coercion_cast(fcx) {
             self.trivial_cast_lint(fcx);
             debug!(" -> CoercionCast");
-            fcx.tables.borrow_mut().cast_kinds_mut().insert(self.expr.hir_id,
-                                                            CastKind::CoercionCast);
+            fcx.tables.borrow_mut().set_coercion_cast(self.expr.hir_id.local_id);
+
         } else {
             match self.do_check(fcx) {
                 Ok(k) => {
                     debug!(" -> {:?}", k);
-                    fcx.tables.borrow_mut().cast_kinds_mut().insert(self.expr.hir_id, k);
                 }
                 Err(e) => self.report_cast_error(fcx, e),
             };
@@ -460,6 +462,9 @@ impl<'a, 'gcx, 'tcx> CastCheck<'tcx> {
                                              self.expr_ty,
                                              fcx.tcx.mk_fn_ptr(f),
                                              AllowTwoPhase::No);
+                    dbg!(self.expr);
+                    dbg!(self.expr_ty);
+                    dbg!(fcx.tcx.mk_fn_ptr(f));
                     if res.is_err() {
                         return Err(CastError::NonScalar);
                     }
@@ -637,6 +642,7 @@ impl<'a, 'gcx, 'tcx> CastCheck<'tcx> {
     }
 
     fn try_coercion_cast(&self, fcx: &FnCtxt<'a, 'gcx, 'tcx>) -> bool {
+        dbg!("$$$$$$$$$$$$$$$$");
         fcx.try_coerce(self.expr, self.expr_ty, self.cast_ty, AllowTwoPhase::No).is_ok()
     }
 }

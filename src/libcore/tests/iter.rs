@@ -190,7 +190,6 @@ fn test_iterator_step_by() {
 }
 
 #[test]
-#[cfg(not(miri))]
 fn test_iterator_step_by_nth() {
     let mut it = (0..16).step_by(5);
     assert_eq!(it.nth(0), Some(0));
@@ -209,7 +208,6 @@ fn test_iterator_step_by_nth() {
 }
 
 #[test]
-#[cfg(not(miri))]
 fn test_iterator_step_by_nth_overflow() {
     #[cfg(target_pointer_width = "8")]
     type Bigger = u16;
@@ -255,14 +253,12 @@ fn test_iterator_step_by_nth_overflow() {
 
 #[test]
 #[should_panic]
-#[cfg(not(miri))]
 fn test_iterator_step_by_zero() {
     let mut it = (0..).step_by(0);
     it.next();
 }
 
 #[test]
-#[cfg(not(miri))]
 fn test_iterator_step_by_size_hint() {
     struct StubSizeHint(usize, Option<usize>);
     impl Iterator for StubSizeHint {
@@ -1085,12 +1081,39 @@ fn test_iterator_product_result() {
     assert_eq!(v.iter().cloned().product::<Result<i32, _>>(), Err(()));
 }
 
+/// A wrapper struct that implements `Eq` and `Ord` based on the wrapped
+/// integer modulo 3. Used to test that `Iterator::max` and `Iterator::min`
+/// return the correct element if some of them are equal.
+#[derive(Debug)]
+struct Mod3(i32);
+
+impl PartialEq for Mod3 {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 % 3 == other.0 % 3
+    }
+}
+
+impl Eq for Mod3 {}
+
+impl PartialOrd for Mod3 {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Mod3 {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        (self.0 % 3).cmp(&(other.0 % 3))
+    }
+}
+
 #[test]
 fn test_iterator_max() {
     let v: &[_] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
     assert_eq!(v[..4].iter().cloned().max(), Some(3));
     assert_eq!(v.iter().cloned().max(), Some(10));
     assert_eq!(v[..0].iter().cloned().max(), None);
+    assert_eq!(v.iter().cloned().map(Mod3).max().map(|x| x.0), Some(8));
 }
 
 #[test]
@@ -1099,6 +1122,7 @@ fn test_iterator_min() {
     assert_eq!(v[..4].iter().cloned().min(), Some(0));
     assert_eq!(v.iter().cloned().min(), Some(0));
     assert_eq!(v[..0].iter().cloned().min(), None);
+    assert_eq!(v.iter().cloned().map(Mod3).min().map(|x| x.0), Some(0));
 }
 
 #[test]
@@ -1417,7 +1441,6 @@ fn test_rposition() {
 
 #[test]
 #[should_panic]
-#[cfg(not(miri))]
 fn test_rposition_panic() {
     let v: [(Box<_>, Box<_>); 4] =
         [(box 0, box 0), (box 0, box 0),
@@ -1657,7 +1680,6 @@ fn test_range_inclusive_nth() {
 }
 
 #[test]
-#[cfg(not(miri))]
 fn test_range_step() {
     #![allow(deprecated)]
 
@@ -1681,7 +1703,6 @@ fn test_range_step() {
 }
 
 #[test]
-#[cfg(not(miri))]
 fn test_step_by_skip() {
     assert_eq!((0..640).step_by(128).skip(1).collect::<Vec<_>>(), [128, 256, 384, 512]);
     assert_eq!((0..=50).step_by(10).nth(3), Some(30));
@@ -1689,7 +1710,6 @@ fn test_step_by_skip() {
 }
 
 #[test]
-#[cfg(not(miri))]
 fn test_range_inclusive_step() {
     assert_eq!((0..=50).step_by(10).collect::<Vec<_>>(), [0, 10, 20, 30, 40, 50]);
     assert_eq!((0..=5).step_by(1).collect::<Vec<_>>(), [0, 1, 2, 3, 4, 5]);
@@ -1747,18 +1767,36 @@ fn test_range_inclusive_folds() {
     assert_eq!((1..=10).sum::<i32>(), 55);
     assert_eq!((1..=10).rev().sum::<i32>(), 55);
 
-    let mut it = 40..=50;
+    let mut it = 44..=50;
     assert_eq!(it.try_fold(0, i8::checked_add), None);
-    assert_eq!(it, 44..=50);
+    assert_eq!(it, 47..=50);
+    assert_eq!(it.try_fold(0, i8::checked_add), None);
+    assert_eq!(it, 50..=50);
+    assert_eq!(it.try_fold(0, i8::checked_add), Some(50));
+    assert!(it.is_empty());
+    assert_eq!(it.try_fold(0, i8::checked_add), Some(0));
+    assert!(it.is_empty());
+
+    let mut it = 40..=47;
     assert_eq!(it.try_rfold(0, i8::checked_add), None);
-    assert_eq!(it, 44..=47);
+    assert_eq!(it, 40..=44);
+    assert_eq!(it.try_rfold(0, i8::checked_add), None);
+    assert_eq!(it, 40..=41);
+    assert_eq!(it.try_rfold(0, i8::checked_add), Some(81));
+    assert!(it.is_empty());
+    assert_eq!(it.try_rfold(0, i8::checked_add), Some(0));
+    assert!(it.is_empty());
 
     let mut it = 10..=20;
     assert_eq!(it.try_fold(0, |a,b| Some(a+b)), Some(165));
     assert!(it.is_empty());
+    assert_eq!(it.try_fold(0, |a,b| Some(a+b)), Some(0));
+    assert!(it.is_empty());
 
     let mut it = 10..=20;
     assert_eq!(it.try_rfold(0, |a,b| Some(a+b)), Some(165));
+    assert!(it.is_empty());
+    assert_eq!(it.try_rfold(0, |a,b| Some(a+b)), Some(0));
     assert!(it.is_empty());
 }
 

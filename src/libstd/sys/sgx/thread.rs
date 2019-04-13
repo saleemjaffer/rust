@@ -1,7 +1,8 @@
-use boxed::FnBox;
-use ffi::CStr;
-use io;
-use time::Duration;
+#![cfg_attr(test, allow(dead_code))] // why is this necessary?
+use crate::boxed::FnBox;
+use crate::ffi::CStr;
+use crate::io;
+use crate::time::Duration;
 
 use super::abi::usercalls;
 
@@ -10,9 +11,9 @@ pub struct Thread(task_queue::JoinHandle);
 pub const DEFAULT_MIN_STACK_SIZE: usize = 4096;
 
 mod task_queue {
-    use sync::{Mutex, MutexGuard, Once};
-    use sync::mpsc;
-    use boxed::FnBox;
+    use crate::sync::{Mutex, MutexGuard, Once};
+    use crate::sync::mpsc;
+    use crate::boxed::FnBox;
 
     pub type JoinHandle = mpsc::Receiver<()>;
 
@@ -33,7 +34,11 @@ mod task_queue {
         }
     }
 
+    #[cfg_attr(test, linkage = "available_externally")]
+    #[export_name = "_ZN16__rust_internals3std3sys3sgx6thread15TASK_QUEUE_INITE"]
     static TASK_QUEUE_INIT: Once = Once::new();
+    #[cfg_attr(test, linkage = "available_externally")]
+    #[export_name = "_ZN16__rust_internals3std3sys3sgx6thread10TASK_QUEUEE"]
     static mut TASK_QUEUE: Option<Mutex<Vec<Task>>> = None;
 
     pub(super) fn lock() -> MutexGuard<'static, Vec<Task>> {

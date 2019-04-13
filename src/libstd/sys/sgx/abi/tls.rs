@@ -1,8 +1,8 @@
-use sync::atomic::{AtomicUsize, Ordering};
-use ptr;
-use mem;
-use cell::Cell;
-use num::NonZeroUsize;
+use crate::sync::atomic::{AtomicUsize, Ordering};
+use crate::ptr;
+use crate::mem;
+use crate::cell::Cell;
+use crate::num::NonZeroUsize;
 use self::sync_bitset::*;
 
 #[cfg(target_pointer_width="64")]
@@ -10,45 +10,16 @@ const USIZE_BITS: usize = 64;
 const TLS_KEYS: usize = 128; // Same as POSIX minimum
 const TLS_KEYS_BITSET_SIZE: usize = (TLS_KEYS + (USIZE_BITS - 1)) / USIZE_BITS;
 
+#[cfg_attr(test, linkage = "available_externally")]
+#[export_name = "_ZN16__rust_internals3std3sys3sgx3abi3tls14TLS_KEY_IN_USEE"]
 static TLS_KEY_IN_USE: SyncBitset = SYNC_BITSET_INIT;
 macro_rules! dup {
     ((* $($exp:tt)*) $($val:tt)*) => (dup!( ($($exp)*) $($val)* $($val)* ));
     (() $($val:tt)*) => ([$($val),*])
 }
-static TLS_DESTRUCTOR: [AtomicUsize; TLS_KEYS] = [
-    AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
-    AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
-    AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
-    AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
-    AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
-    AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
-    AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
-    AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
-    AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
-    AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
-    AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
-    AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
-    AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
-    AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
-    AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
-    AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
-    AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
-    AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
-    AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
-    AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
-    AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
-    AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
-    AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
-    AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
-    AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
-    AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
-    AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
-    AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
-    AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
-    AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
-    AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
-    AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
-];
+#[cfg_attr(test, linkage = "available_externally")]
+#[export_name = "_ZN16__rust_internals3std3sys3sgx3abi3tls14TLS_DESTRUCTORE"]
+static TLS_DESTRUCTOR: [AtomicUsize; TLS_KEYS] = dup!((* * * * * * *) (AtomicUsize::new(0)));
 
 extern "C" {
     fn get_tls_ptr() -> *const u8;
@@ -152,9 +123,9 @@ impl Tls {
 }
 
 mod sync_bitset {
-    use sync::atomic::{AtomicUsize, Ordering};
-    use iter::{Enumerate, Peekable};
-    use slice::Iter;
+    use crate::sync::atomic::{AtomicUsize, Ordering};
+    use crate::iter::{Enumerate, Peekable};
+    use crate::slice::Iter;
     use super::{TLS_KEYS_BITSET_SIZE, USIZE_BITS};
 
     /// A bitset that can be used synchronously.

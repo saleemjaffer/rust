@@ -1,12 +1,12 @@
 //! Buffering wrappers for I/O traits
 
-use io::prelude::*;
+use crate::io::prelude::*;
 
-use cmp;
-use error;
-use fmt;
-use io::{self, Initializer, DEFAULT_BUF_SIZE, Error, ErrorKind, SeekFrom};
-use memchr;
+use crate::cmp;
+use crate::error;
+use crate::fmt;
+use crate::io::{self, Initializer, DEFAULT_BUF_SIZE, Error, ErrorKind, SeekFrom, IoVec, IoVecMut};
+use crate::memchr;
 
 /// The `BufReader` struct adds buffering to any reader.
 ///
@@ -101,7 +101,9 @@ impl<R: Read> BufReader<R> {
             }
         }
     }
+}
 
+impl<R> BufReader<R> {
     /// Gets a reference to the underlying reader.
     ///
     /// It is inadvisable to directly read from the underlying reader.
@@ -191,6 +193,13 @@ impl<R: Read> BufReader<R> {
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
     pub fn into_inner(self) -> R { self.inner }
+
+    /// Invalidates all data in the internal buffer.
+    #[inline]
+    fn discard_buffer(&mut self) {
+        self.pos = 0;
+        self.cap = 0;
+    }
 }
 
 impl<R: Seek> BufReader<R> {
@@ -225,11 +234,26 @@ impl<R: Read> Read for BufReader<R> {
         // (larger than our internal buffer), bypass our internal buffer
         // entirely.
         if self.pos == self.cap && buf.len() >= self.buf.len() {
+            self.discard_buffer();
             return self.inner.read(buf);
         }
         let nread = {
             let mut rem = self.fill_buf()?;
             rem.read(buf)?
+        };
+        self.consume(nread);
+        Ok(nread)
+    }
+
+    fn read_vectored(&mut self, bufs: &mut [IoVecMut<'_>]) -> io::Result<usize> {
+        let total_len = bufs.iter().map(|b| b.len()).sum::<usize>();
+        if self.pos == self.cap && total_len >= self.buf.len() {
+            self.discard_buffer();
+            return self.inner.read_vectored(bufs);
+        }
+        let nread = {
+            let mut rem = self.fill_buf()?;
+            rem.read_vectored(bufs)?
         };
         self.consume(nread);
         Ok(nread)
@@ -310,14 +334,14 @@ impl<R: Seek> Seek for BufReader<R> {
             } else {
                 // seek backwards by our remainder, and then by the offset
                 self.inner.seek(SeekFrom::Current(-remainder))?;
-                self.pos = self.cap; // empty the buffer
+                self.discard_buffer();
                 result = self.inner.seek(SeekFrom::Current(n))?;
             }
         } else {
             // Seeking with Start/End doesn't care about our buffer length.
             result = self.inner.seek(pos)?;
         }
-        self.pos = self.cap; // empty the buffer
+        self.discard_buffer();
         Ok(result)
     }
 }
@@ -577,9 +601,25 @@ impl<W: Write> Write for BufWriter<W> {
             self.panicked = false;
             r
         } else {
-            Write::write(&mut self.buf, buf)
+            self.buf.write(buf)
         }
     }
+
+    fn write_vectored(&mut self, bufs: &[IoVec<'_>]) -> io::Result<usize> {
+        let total_len = bufs.iter().map(|b| b.len()).sum::<usize>();
+        if self.buf.len() + total_len > self.buf.capacity() {
+            self.flush_buf()?;
+        }
+        if total_len >= self.buf.capacity() {
+            self.panicked = true;
+            let r = self.inner.as_mut().unwrap().write_vectored(bufs);
+            self.panicked = false;
+            r
+        } else {
+            self.buf.write_vectored(bufs)
+        }
+    }
+
     fn flush(&mut self) -> io::Result<()> {
         self.flush_buf().and_then(|()| self.get_mut().flush())
     }
@@ -948,11 +988,10 @@ impl<W: Write> fmt::Debug for LineWriter<W> where W: fmt::Debug {
 
 #[cfg(test)]
 mod tests {
-    use io::prelude::*;
-    use io::{self, BufReader, BufWriter, LineWriter, SeekFrom};
-    use sync::atomic::{AtomicUsize, Ordering};
-    use thread;
-    use test;
+    use crate::io::prelude::*;
+    use crate::io::{self, BufReader, BufWriter, LineWriter, SeekFrom};
+    use crate::sync::atomic::{AtomicUsize, Ordering};
+    use crate::thread;
 
     /// A dummy reader intended at testing short-reads propagation.
     pub struct ShortReader {
@@ -1036,6 +1075,40 @@ mod tests {
         assert_eq!(reader.fill_buf().ok(), Some(&[0, 1][..]));
         assert!(reader.seek_relative(2).is_ok());
         assert_eq!(reader.fill_buf().ok(), Some(&[2, 3][..]));
+    }
+
+    #[test]
+    fn test_buffered_reader_invalidated_after_read() {
+        let inner: &[u8] = &[5, 6, 7, 0, 1, 2, 3, 4];
+        let mut reader = BufReader::with_capacity(3, io::Cursor::new(inner));
+
+        assert_eq!(reader.fill_buf().ok(), Some(&[5, 6, 7][..]));
+        reader.consume(3);
+
+        let mut buffer = [0, 0, 0, 0, 0];
+        assert_eq!(reader.read(&mut buffer).ok(), Some(5));
+        assert_eq!(buffer, [0, 1, 2, 3, 4]);
+
+        assert!(reader.seek_relative(-2).is_ok());
+        let mut buffer = [0, 0];
+        assert_eq!(reader.read(&mut buffer).ok(), Some(2));
+        assert_eq!(buffer, [3, 4]);
+    }
+
+    #[test]
+    fn test_buffered_reader_invalidated_after_seek() {
+        let inner: &[u8] = &[5, 6, 7, 0, 1, 2, 3, 4];
+        let mut reader = BufReader::with_capacity(3, io::Cursor::new(inner));
+
+        assert_eq!(reader.fill_buf().ok(), Some(&[5, 6, 7][..]));
+        reader.consume(3);
+
+        assert!(reader.seek(SeekFrom::Current(5)).is_ok());
+
+        assert!(reader.seek_relative(-2).is_ok());
+        let mut buffer = [0, 0];
+        assert_eq!(reader.read(&mut buffer).ok(), Some(2));
+        assert_eq!(buffer, [3, 4]);
     }
 
     #[test]
@@ -1174,7 +1247,7 @@ mod tests {
         // Issue #32085
         struct FailFlushWriter<'a>(&'a mut Vec<u8>);
 
-        impl<'a> Write for FailFlushWriter<'a> {
+        impl Write for FailFlushWriter<'_> {
             fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
                 self.0.extend_from_slice(buf);
                 Ok(buf.len())

@@ -21,8 +21,9 @@ use crate::early_buffered_lints::BufferedEarlyLintId;
 use crate::source_map::Spanned;
 use crate::edition::{ALL_EDITIONS, Edition};
 use crate::visit::{self, FnKind, Visitor};
-use crate::parse::ParseSess;
+use crate::parse::{token, ParseSess};
 use crate::symbol::Symbol;
+use crate::tokenstream::TokenTree;
 
 use errors::{DiagnosticBuilder, Handler};
 use rustc_data_structures::fx::FxHashMap;
@@ -232,8 +233,8 @@ declare_features! (
 
     // Allows `#[unwind(..)]`.
     //
-    // rustc internal for rust runtime
-    (active, unwind_attributes, "1.4.0", None, None),
+    // Permits specifying whether a function should permit unwinding or abort on unwind.
+    (active, unwind_attributes, "1.4.0", Some(58760), None),
 
     // Allows the use of `#[naked]` on functions.
     (active, naked_functions, "1.9.0", Some(32408), None),
@@ -289,6 +290,9 @@ declare_features! (
 
     // The `repr(i128)` annotation for enums.
     (active, repr128, "1.16.0", Some(35118), None),
+
+    // Allows the use of `#[ffi_returns_twice]` on foreign functions.
+    (active, ffi_returns_twice, "1.34.0", Some(58314), None),
 
     // The `unadjusted` ABI; perma-unstable.
     //
@@ -428,9 +432,6 @@ declare_features! (
     // Added for testing E0705; perma-unstable.
     (active, test_2018_feature, "1.31.0", Some(0), Some(Edition::Edition2018)),
 
-    // support for arbitrary delimited token streams in non-macro attributes
-    (active, unrestricted_attribute_tokens, "1.30.0", Some(55208), None),
-
     // Allows unsized rvalues at arguments and parameters.
     (active, unsized_locals, "1.30.0", Some(48055), None),
 
@@ -470,6 +471,9 @@ declare_features! (
 
     // #[repr(align(X))] on enums
     (active, repr_align_enum, "1.34.0", Some(57996), None),
+
+    // Allows the use of C-variadics
+    (active, c_variadic, "1.34.0", Some(44930), None),
 );
 
 declare_features! (
@@ -697,6 +701,8 @@ declare_features! (
     (accepted, cfg_target_vendor, "1.33.0", Some(29718), None),
     // `extern crate self as foo;` puts local crate root into extern prelude under name `foo`.
     (accepted, extern_crate_self, "1.34.0", Some(56409), None),
+    // support for arbitrary delimited token streams in non-macro attributes
+    (accepted, unrestricted_attribute_tokens, "1.34.0", Some(55208), None),
 );
 
 // If you change this, please modify `src/doc/unstable-book` as well. You must
@@ -1036,7 +1042,7 @@ pub const BUILTIN_ATTRIBUTES: &[(&str, AttributeType, AttributeTemplate, Attribu
                                              "rustc_attrs",
                                              "internal rustc attributes will never be stable",
                                              cfg_fn!(rustc_attrs))),
-    ("rustc_item_path", Whitelisted, template!(Word), Gated(Stability::Unstable,
+    ("rustc_def_path", Whitelisted, template!(Word), Gated(Stability::Unstable,
                                            "rustc_attrs",
                                            "internal rustc attributes will never be stable",
                                            cfg_fn!(rustc_attrs))),
@@ -1128,6 +1134,11 @@ pub const BUILTIN_ATTRIBUTES: &[(&str, AttributeType, AttributeTemplate, Attribu
                                  "the `#[naked]` attribute \
                                   is an experimental feature",
                                  cfg_fn!(naked_functions))),
+    ("ffi_returns_twice", Whitelisted, template!(Word), Gated(Stability::Unstable,
+                                 "ffi_returns_twice",
+                                 "the `#[ffi_returns_twice]` attribute \
+                                  is an experimental feature",
+                                 cfg_fn!(ffi_returns_twice))),
     ("target_feature", Whitelisted, template!(List: r#"enable = "name""#), Ungated),
     ("export_name", Whitelisted, template!(NameValueStr: "name"), Ungated),
     ("inline", Whitelisted, template!(Word, List: "always|never"), Ungated),
@@ -1165,7 +1176,7 @@ pub const BUILTIN_ATTRIBUTES: &[(&str, AttributeType, AttributeTemplate, Attribu
            "dropck_eyepatch",
            "may_dangle has unstable semantics and may be removed in the future",
            cfg_fn!(dropck_eyepatch))),
-    ("unwind", Whitelisted, template!(List: "allowed"), Gated(Stability::Unstable,
+    ("unwind", Whitelisted, template!(List: "allowed|aborts"), Gated(Stability::Unstable,
                                   "unwind_attributes",
                                   "#[unwind] is experimental",
                                   cfg_fn!(unwind_attributes))),
@@ -1278,9 +1289,8 @@ pub struct GatedCfg {
 
 impl GatedCfg {
     pub fn gate(cfg: &ast::MetaItem) -> Option<GatedCfg> {
-        let name = cfg.name().as_str();
         GATED_CFGS.iter()
-                  .position(|info| info.0 == name)
+                  .position(|info| cfg.check_name(info.0))
                   .map(|idx| {
                       GatedCfg {
                           span: cfg.span,
@@ -1331,7 +1341,7 @@ macro_rules! gate_feature {
 impl<'a> Context<'a> {
     fn check_attribute(&self, attr: &ast::Attribute, is_macro: bool) {
         debug!("check_attribute(attr = {:?})", attr);
-        let name = attr.name().as_str();
+        let name = attr.name_or_empty();
         for &(n, ty, _template, ref gateage) in BUILTIN_ATTRIBUTES {
             if name == n {
                 if let Gated(_, name, desc, ref has_feature) = *gateage {
@@ -1340,7 +1350,7 @@ impl<'a> Context<'a> {
                             self, has_feature, attr.span, name, desc, GateStrength::Hard
                         );
                     }
-                } else if name == "doc" {
+                } else if n == "doc" {
                     if let Some(content) = attr.meta_item_list() {
                         if content.iter().any(|c| c.check_name("include")) {
                             gate_feature!(self, external_doc, attr.span,
@@ -1652,13 +1662,9 @@ impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
 
         match BUILTIN_ATTRIBUTES.iter().find(|(name, ..)| attr.path == name) {
             Some(&(name, _, template, _)) => self.check_builtin_attribute(attr, name, template),
-            None => if !self.context.features.unrestricted_attribute_tokens {
-                // Unfortunately, `parse_meta` cannot be called speculatively
-                // because it can report errors by itself, so we have to call it
-                // only if the feature is disabled.
-                if let Err(mut err) = attr.parse_meta(self.context.parse_sess) {
-                    err.help("try enabling `#![feature(unrestricted_attribute_tokens)]`").emit()
-                }
+            None => if let Some(TokenTree::Token(_, token::Eq)) = attr.tokens.trees().next() {
+                // All key-value attributes are restricted to meta-item syntax.
+                attr.parse_meta(self.context.parse_sess).map_err(|mut err| err.emit()).ok();
             }
         }
     }
@@ -1894,8 +1900,13 @@ impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
         match fn_kind {
             FnKind::ItemFn(_, header, _, _) => {
                 // Check for const fn and async fn declarations.
-                if header.asyncness.is_async() {
+                if header.asyncness.node.is_async() {
                     gate_feature_post!(&self, async_await, span, "async fn is unstable");
+                }
+
+                if fn_decl.c_variadic {
+                    gate_feature_post!(&self, c_variadic, span,
+                                       "C-varaidic functions are unstable");
                 }
                 // Stability of const fn methods are covered in
                 // `visit_trait_item` and `visit_impl_item` below; this is
@@ -1924,6 +1935,10 @@ impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
             ast::TraitItemKind::Method(ref sig, ref block) => {
                 if block.is_none() {
                     self.check_abi(sig.header.abi, ti.span);
+                }
+                if sig.decl.c_variadic {
+                    gate_feature_post!(&self, c_variadic, ti.span,
+                                       "C-varaidic functions are unstable");
                 }
                 if sig.header.constness.node == ast::Constness::Const {
                     gate_feature_post!(&self, const_fn, ti.span, "const fn is unstable");
@@ -1992,7 +2007,7 @@ impl<'a> Visitor<'a> for PostExpansionVisitor<'a> {
 }
 
 pub fn get_features(span_handler: &Handler, krate_attrs: &[ast::Attribute],
-                    crate_edition: Edition) -> Features {
+                    crate_edition: Edition, allow_features: &Option<Vec<String>>) -> Features {
     fn feature_removed(span_handler: &Handler, span: Span, reason: Option<&str>) {
         let mut err = struct_span_err!(span_handler, span, E0557, "feature has been removed");
         if let Some(reason) = reason {
@@ -2039,15 +2054,14 @@ pub fn get_features(span_handler: &Handler, krate_attrs: &[ast::Attribute],
         };
 
         for mi in list {
-            let name = if let Some(word) = mi.word() {
-                word.name()
-            } else {
-                continue
-            };
+            if !mi.is_word() {
+                continue;
+            }
 
-            if incomplete_features.iter().any(|f| *f == name.as_str()) {
+            let name = mi.name_or_empty();
+            if incomplete_features.iter().any(|f| name == *f) {
                 span_handler.struct_span_warn(
-                    mi.span,
+                    mi.span(),
                     &format!(
                         "the feature `{}` is incomplete and may cause the compiler to crash",
                         name
@@ -2085,18 +2099,19 @@ pub fn get_features(span_handler: &Handler, krate_attrs: &[ast::Attribute],
         };
 
         for mi in list {
-            let name = if let Some(word) = mi.word() {
-                word.name()
-            } else {
-                span_err!(span_handler, mi.span, E0556,
-                          "malformed feature, expected just one word");
-                continue
+            let name = match mi.ident() {
+                Some(ident) if mi.is_word() => ident.name,
+                _ => {
+                    span_err!(span_handler, mi.span(), E0556,
+                            "malformed feature, expected just one word");
+                    continue
+                }
             };
 
             if let Some(edition) = edition_enabled_features.get(&name) {
                 struct_span_warn!(
                     span_handler,
-                    mi.span,
+                    mi.span(),
                     E0705,
                     "the feature `{}` is included in the Rust {} edition",
                     name,
@@ -2111,25 +2126,34 @@ pub fn get_features(span_handler: &Handler, krate_attrs: &[ast::Attribute],
             }
 
             if let Some((.., set)) = ACTIVE_FEATURES.iter().find(|f| name == f.0) {
-                set(&mut features, mi.span);
-                features.declared_lang_features.push((name, mi.span, None));
+                if let Some(allowed) = allow_features.as_ref() {
+                    if allowed.iter().find(|f| *f == name.as_str()).is_none() {
+                        span_err!(span_handler, mi.span(), E0725,
+                                  "the feature `{}` is not in the list of allowed features",
+                                  name);
+                        continue;
+                    }
+                }
+
+                set(&mut features, mi.span());
+                features.declared_lang_features.push((name, mi.span(), None));
                 continue
             }
 
             let removed = REMOVED_FEATURES.iter().find(|f| name == f.0);
             let stable_removed = STABLE_REMOVED_FEATURES.iter().find(|f| name == f.0);
             if let Some((.., reason)) = removed.or(stable_removed) {
-                feature_removed(span_handler, mi.span, *reason);
+                feature_removed(span_handler, mi.span(), *reason);
                 continue
             }
 
             if let Some((_, since, ..)) = ACCEPTED_FEATURES.iter().find(|f| name == f.0) {
                 let since = Some(Symbol::intern(since));
-                features.declared_lang_features.push((name, mi.span, since));
+                features.declared_lang_features.push((name, mi.span(), since));
                 continue
             }
 
-            features.declared_lib_features.push((name, mi.span));
+            features.declared_lib_features.push((name, mi.span()));
         }
     }
 

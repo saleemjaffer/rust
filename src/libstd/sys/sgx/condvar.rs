@@ -1,5 +1,5 @@
-use sys::mutex::Mutex;
-use time::Duration;
+use crate::sys::mutex::Mutex;
+use crate::time::Duration;
 
 use super::waitqueue::{WaitVariable, WaitQueue, SpinMutex};
 
@@ -32,7 +32,8 @@ impl Condvar {
         mutex.lock()
     }
 
-    pub unsafe fn wait_timeout(&self, _mutex: &Mutex, _dur: Duration) -> bool {
+    pub unsafe fn wait_timeout(&self, mutex: &Mutex, _dur: Duration) -> bool {
+        mutex.unlock(); // don't hold the lock while panicking
         panic!("timeout not supported in SGX");
     }
 

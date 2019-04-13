@@ -2,8 +2,7 @@ use std::cmp::Reverse;
 
 use errors::{Applicability, DiagnosticBuilder, DiagnosticId};
 use log::debug;
-use rustc::hir::def::*;
-use rustc::hir::def::Namespace::*;
+use rustc::hir::def::{Def, CtorKind, Namespace::*};
 use rustc::hir::def_id::{CRATE_DEF_INDEX, DefId};
 use rustc::session::config::nightly_options;
 use syntax::ast::{ExprKind};
@@ -259,6 +258,10 @@ impl<'a> Resolver<'a> {
                     format!("{}!", path_str),
                     Applicability::MaybeIncorrect,
                 );
+                if path_str == "try" && span.rust_2015() {
+                    err.note("if you want the `try` keyword, \
+                        you need to be in the 2018 edition");
+                }
             }
             (Def::TyAlias(..), PathSource::Trait(_)) => {
                 err.span_label(span, "type aliases cannot be used as traits");
@@ -289,13 +292,20 @@ impl<'a> Resolver<'a> {
             (Def::Enum(..), PathSource::TupleStruct)
                 | (Def::Enum(..), PathSource::Expr(..))  => {
                 if let Some(variants) = self.collect_enum_variants(def) {
-                    err.note(&format!("did you mean to use one \
-                                       of the following variants?\n{}",
-                        variants.iter()
-                            .map(|suggestion| path_names_to_string(suggestion))
-                            .map(|suggestion| format!("- `{}`", suggestion))
-                            .collect::<Vec<_>>()
-                            .join("\n")));
+                    if !variants.is_empty() {
+                        let msg = if variants.len() == 1 {
+                            "try using the enum's variant"
+                        } else {
+                            "try using one of the enum's variants"
+                        };
+
+                        err.span_suggestions(
+                            span,
+                            msg,
+                            variants.iter().map(path_names_to_string),
+                            Applicability::MaybeIncorrect,
+                        );
+                    }
                 } else {
                     err.note("did you mean to use one of the enum's variants?");
                 }
@@ -406,7 +416,7 @@ impl<'a> Resolver<'a> {
             }
             (Def::Union(..), _) |
             (Def::Variant(..), _) |
-            (Def::VariantCtor(_, CtorKind::Fictive), _) if ns == ValueNS => {
+            (Def::Ctor(_, _, CtorKind::Fictive), _) if ns == ValueNS => {
                 err.span_label(span, format!("did you mean `{} {{ /* fields */ }}`?",
                                              path_str));
             }

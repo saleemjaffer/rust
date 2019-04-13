@@ -10,8 +10,8 @@
 /// recorded in the enclave. The wakeup event state is protected by a spinlock.
 /// The queue and associated wait state are stored in a `WaitVariable`.
 
-use ops::{Deref, DerefMut};
-use num::NonZeroUsize;
+use crate::ops::{Deref, DerefMut};
+use crate::num::NonZeroUsize;
 
 use fortanix_sgx_abi::{Tcs, EV_UNPARK, WAIT_INDEFINITE};
 use super::abi::usercalls;
@@ -211,8 +211,8 @@ impl WaitQueue {
 /// A doubly-linked list where callers are in charge of memory allocation
 /// of the nodes in the list.
 mod unsafe_list {
-    use ptr::NonNull;
-    use mem;
+    use crate::ptr::NonNull;
+    use crate::mem;
 
     pub struct UnsafeListEntry<T> {
         next: NonNull<UnsafeListEntry<T>>,
@@ -341,7 +341,7 @@ mod unsafe_list {
     #[cfg(test)]
     mod tests {
         use super::*;
-        use cell::Cell;
+        use crate::cell::Cell;
 
         unsafe fn assert_empty<T>(list: &mut UnsafeList<T>) {
             assert!(list.pop().is_none(), "assertion failed: list is not empty");
@@ -404,9 +404,9 @@ mod unsafe_list {
 /// Trivial spinlock-based implementation of `sync::Mutex`.
 // FIXME: Perhaps use Intel TSX to avoid locking?
 mod spin_mutex {
-    use cell::UnsafeCell;
-    use sync::atomic::{AtomicBool, Ordering, spin_loop_hint};
-    use ops::{Deref, DerefMut};
+    use crate::cell::UnsafeCell;
+    use crate::sync::atomic::{AtomicBool, Ordering, spin_loop_hint};
+    use crate::ops::{Deref, DerefMut};
 
     #[derive(Default)]
     pub struct SpinMutex<T> {
@@ -496,8 +496,9 @@ mod spin_mutex {
         #![allow(deprecated)]
 
         use super::*;
-        use sync::Arc;
-        use thread;
+        use crate::sync::Arc;
+        use crate::thread;
+        use crate::time::{SystemTime, Duration};
 
         #[test]
         fn sleep() {
@@ -507,7 +508,13 @@ mod spin_mutex {
             let t1 = thread::spawn(move || {
                 *mutex2.lock() = 1;
             });
-            thread::sleep_ms(50);
+
+            // "sleep" for 50ms
+            // FIXME: https://github.com/fortanix/rust-sgx/issues/31
+            let start = SystemTime::now();
+            let max = Duration::from_millis(50);
+            while start.elapsed().unwrap() < max {}
+
             assert_eq!(*guard, 0);
             drop(guard);
             t1.join().unwrap();
@@ -519,8 +526,8 @@ mod spin_mutex {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sync::Arc;
-    use thread;
+    use crate::sync::Arc;
+    use crate::thread;
 
     #[test]
     fn queue() {
@@ -530,7 +537,8 @@ mod tests {
         let locked = wq.lock();
 
         let t1 = thread::spawn(move || {
-            assert!(WaitQueue::notify_one(wq2.lock()).is_none())
+            // if we obtain the lock, the main thread should be waiting
+            assert!(WaitQueue::notify_one(wq2.lock()).is_ok());
         });
 
         WaitQueue::wait(locked);

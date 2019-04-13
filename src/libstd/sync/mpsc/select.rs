@@ -46,16 +46,14 @@
 #![rustc_deprecated(since = "1.32.0",
                     reason = "channel selection will be removed in a future release")]
 
-
-use fmt;
-
 use core::cell::{Cell, UnsafeCell};
 use core::marker;
 use core::ptr;
 use core::usize;
 
-use sync::mpsc::{Receiver, RecvError};
-use sync::mpsc::blocking::{self, SignalToken};
+use crate::fmt;
+use crate::sync::mpsc::{Receiver, RecvError};
+use crate::sync::mpsc::blocking::{self, SignalToken};
 
 /// The "receiver set" of the select interface. This structure is used to manage
 /// a set of receivers which are being selected over.
@@ -321,7 +319,7 @@ impl Drop for Select {
     }
 }
 
-impl<'rx, T: Send> Drop for Handle<'rx, T> {
+impl<T: Send> Drop for Handle<'_, T> {
     fn drop(&mut self) {
         unsafe { self.remove() }
     }
@@ -347,7 +345,7 @@ impl fmt::Debug for Select {
     }
 }
 
-impl<'rx, T:Send+'rx> fmt::Debug for Handle<'rx, T> {
+impl<T: Send> fmt::Debug for Handle<'_, T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("Handle").finish()
     }

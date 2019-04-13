@@ -12,20 +12,24 @@ try:
 except ImportError:
     import urllib.request as urllib2
 
-# List of people to ping when the status of a tool changed.
+# List of people to ping when the status of a tool or a book changed.
 MAINTAINERS = {
     'miri': '@oli-obk @RalfJung @eddyb',
-    'clippy-driver': '@Manishearth @llogiq @mcarton @oli-obk',
+    'clippy-driver': '@Manishearth @llogiq @mcarton @oli-obk @phansch',
     'rls': '@nrc @Xanewok',
     'rustfmt': '@nrc @topecongiro',
     'book': '@carols10cents @steveklabnik',
     'nomicon': '@frewsxcv @Gankro',
     'reference': '@steveklabnik @Havvy @matthewjasper @alercah',
     'rust-by-example': '@steveklabnik @marioidival @projektir',
+    'embedded-book': (
+        '@adamgreig @andre-richter @jamesmunns @korken89 '
+        '@ryankurte @thejpster @therealprof'
+    ),
 }
 
 REPOS = {
-    'miri': 'https://github.com/solson/miri',
+    'miri': 'https://github.com/rust-lang/miri',
     'clippy-driver': 'https://github.com/rust-lang/rust-clippy',
     'rls': 'https://github.com/rust-lang/rls',
     'rustfmt': 'https://github.com/rust-lang/rustfmt',
@@ -33,6 +37,7 @@ REPOS = {
     'nomicon': 'https://github.com/rust-lang-nursery/nomicon',
     'reference': 'https://github.com/rust-lang-nursery/reference',
     'rust-by-example': 'https://github.com/rust-lang/rust-by-example',
+    'embedded-book': 'https://github.com/rust-embedded/book',
 }
 
 
@@ -70,7 +75,7 @@ def issue(
 
             cc @{}, the PR reviewer, and @rust-lang/compiler -- nominating for prioritization.
 
-            ''').format(relevant_pr_number, tool, REPOS[tool], relevant_pr_user, pr_reviewer),
+            ''').format(relevant_pr_number, tool, REPOS.get(tool), relevant_pr_user, pr_reviewer),
             'title': '`{}` no longer builds after {}'.format(tool, relevant_pr_number),
             'assignees': assignees,
             'labels': ['T-compiler', 'I-nominated'],
@@ -137,15 +142,15 @@ def update_latest(
             if build_failed:
                 try:
                     issue(
-                        tool, MAINTAINERS.get(tool),
+                        tool, MAINTAINERS.get(tool, ''),
                         relevant_pr_number, relevant_pr_user, pr_reviewer,
                     )
-                except IOError as (errno, strerror):
+                except IOError as e:
                     # network errors will simply end up not creating an issue, but that's better
                     # than failing the entire build job
-                    print "I/O error({0}): {1}".format(errno, strerror)
+                    print("I/O error: {0}".format(e))
                 except:
-                    print "Unexpected error:", sys.exc_info()[0]
+                    print("Unexpected error: {0}".format(sys.exc_info()[0]))
                     raise
 
             if changed:
@@ -171,7 +176,7 @@ if __name__ == '__main__':
 
     # assume that PR authors are also owners of the repo where the branch lives
     relevant_pr_match = re.search(
-        'Auto merge of #([0-9]+) - ([^:]+):[^,]+ r=([^\s]+)',
+        r'Auto merge of #([0-9]+) - ([^:]+):[^,]+, r=(\S+)',
         cur_commit_msg,
     )
     if relevant_pr_match:
@@ -182,10 +187,10 @@ if __name__ == '__main__':
         pr_reviewer = relevant_pr_match.group(3)
     else:
         number = '-1'
-        relevant_pr_user = '<unknown user>'
+        relevant_pr_user = 'ghost'
         relevant_pr_number = '<unknown PR>'
         relevant_pr_url = '<unknown>'
-        pr_reviewer = '<unknown reviewer>'
+        pr_reviewer = 'ghost'
 
     message = update_latest(
         cur_commit,

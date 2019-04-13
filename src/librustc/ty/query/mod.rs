@@ -19,7 +19,7 @@ use crate::mir::interpret::{ConstEvalRawResult, ConstEvalResult};
 use crate::mir::mono::CodegenUnit;
 use crate::mir;
 use crate::mir::interpret::GlobalId;
-use crate::session::{CompileResult, CrateDisambiguator};
+use crate::session::CrateDisambiguator;
 use crate::session::config::{EntryFnType, OutputFilenames, OptLevel};
 use crate::traits::{self, Vtable};
 use crate::traits::query::{
@@ -34,15 +34,15 @@ use crate::traits::query::normalize::NormalizationResult;
 use crate::traits::query::outlives_bounds::OutlivesBound;
 use crate::traits::specialization_graph;
 use crate::traits::Clauses;
-use crate::ty::{self, CrateInherentImpls, ParamEnvAnd, Ty, TyCtxt};
+use crate::ty::{self, CrateInherentImpls, ParamEnvAnd, Ty, TyCtxt, AdtSizedConstraint};
 use crate::ty::steal::Steal;
-use crate::ty::subst::Substs;
+use crate::ty::util::NeedsDrop;
+use crate::ty::subst::SubstsRef;
 use crate::util::nodemap::{DefIdSet, DefIdMap, ItemLocalSet};
 use crate::util::common::{ErrorReported};
 use crate::util::profiling::ProfileCategory::*;
 use crate::session::Session;
 
-use errors::DiagnosticBuilder;
 use rustc_data_structures::svh::Svh;
 use rustc_data_structures::bit_set::BitSet;
 use rustc_data_structures::indexed_vec::IndexVec;
@@ -80,13 +80,14 @@ mod values;
 use self::values::Value;
 
 mod config;
+pub(crate) use self::config::QueryDescription;
 pub use self::config::QueryConfig;
-use self::config::{QueryAccessors, QueryDescription};
+use self::config::QueryAccessors;
 
 mod on_disk_cache;
 pub use self::on_disk_cache::OnDiskCache;
 
-// Each of these quries corresponds to a function pointer field in the
+// Each of these queries corresponds to a function pointer field in the
 // `Providers` struct for requesting a value of that type, and a method
 // on `tcx: TyCtxt` (and `tcx.at(span)`) for doing that request in a way
 // which memoizes and does dep-graph tracking, wrapping around the actual
@@ -97,31 +98,11 @@ pub use self::on_disk_cache::OnDiskCache;
 // (error) value if the query resulted in a query cycle.
 // Queries marked with `fatal_cycle` do not need the latter implementation,
 // as they will raise an fatal error on query cycles instead.
-define_queries! { <'tcx>
+
+rustc_query_append! { [define_queries!][ <'tcx>
     Other {
-        /// Records the type of every item.
-        [] fn type_of: TypeOfItem(DefId) -> Ty<'tcx>,
-
-        /// Maps from the `DefId` of an item (trait/struct/enum/fn) to its
-        /// associated generics.
-        [] fn generics_of: GenericsOfItem(DefId) -> &'tcx ty::Generics,
-
-        /// Maps from the `DefId` of an item (trait/struct/enum/fn) to the
-        /// predicates (where-clauses) that must be proven true in order
-        /// to reference it. This is almost always the "predicates query"
-        /// that you want.
-        ///
-        /// `predicates_of` builds on `predicates_defined_on` -- in fact,
-        /// it is almost always the same as that query, except for the
-        /// case of traits. For traits, `predicates_of` contains
-        /// an additional `Self: Trait<...>` predicate that users don't
-        /// actually write. This reflects the fact that to invoke the
-        /// trait (e.g., via `Default::default`) you must supply types
-        /// that actually implement the trait. (However, this extra
-        /// predicate gets in the way of some checks, which are intended
-        /// to operate over only the actual where-clauses written by the
-        /// user.)
-        [] fn predicates_of: PredicatesOfItem(DefId) -> Lrc<ty::GenericPredicates<'tcx>>,
+        /// Run analysis passes on the crate
+        [] fn analysis: Analysis(CrateNum) -> Result<(), ErrorReported>,
 
         /// Maps from the `DefId` of an item (trait/struct/enum/fn) to the
         /// predicates (where-clauses) directly defined on it. This is
@@ -154,7 +135,16 @@ define_queries! { <'tcx>
         [] fn trait_def: TraitDefOfItem(DefId) -> &'tcx ty::TraitDef,
         [] fn adt_def: AdtDefOfItem(DefId) -> &'tcx ty::AdtDef,
         [] fn adt_destructor: AdtDestructor(DefId) -> Option<ty::Destructor>,
-        [] fn adt_sized_constraint: SizedConstraint(DefId) -> &'tcx [Ty<'tcx>],
+
+        // The cycle error here should be reported as an error by `check_representable`.
+        // We consider the type as Sized in the meanwhile to avoid
+        // further errors (done in impl Value for AdtSizedConstraint).
+        // Use `cycle_delay_bug` to delay the cycle error here to be emitted later
+        // in case we accidentally otherwise don't emit an error.
+        [cycle_delay_bug] fn adt_sized_constraint: SizedConstraint(
+            DefId
+        ) -> AdtSizedConstraint<'tcx>,
+
         [] fn adt_dtorck_constraint: DtorckConstraint(
             DefId
         ) -> Result<DtorckConstraint<'tcx>, NoSolution>,
@@ -281,7 +271,8 @@ define_queries! { <'tcx>
     },
 
     TypeChecking {
-        [] fn typeck_item_bodies: typeck_item_bodies_dep_node(CrateNum) -> CompileResult,
+        [] fn typeck_item_bodies:
+                typeck_item_bodies_dep_node(CrateNum) -> (),
 
         [] fn typeck_tables_of: TypeckTables(DefId) -> &'tcx ty::TypeckTables<'tcx>,
     },
@@ -334,11 +325,11 @@ define_queries! { <'tcx>
     },
 
     TypeChecking {
-        [] fn check_match: CheckMatch(DefId)
-            -> Result<(), ErrorReported>,
+        [] fn check_match: CheckMatch(DefId) -> (),
 
-        /// Performs the privacy check and computes "access levels".
+        /// Performs part of the privacy check and computes "access levels".
         [] fn privacy_access_levels: PrivacyAccessLevels(CrateNum) -> Lrc<AccessLevels>,
+        [] fn check_private_in_public: CheckPrivateInPublic(CrateNum) -> (),
     },
 
     Other {
@@ -384,7 +375,7 @@ define_queries! { <'tcx>
 
     Other {
         [] fn vtable_methods: vtable_methods_node(ty::PolyTraitRef<'tcx>)
-                            -> Lrc<Vec<Option<(DefId, &'tcx Substs<'tcx>)>>>,
+                            -> Lrc<Vec<Option<(DefId, SubstsRef<'tcx>)>>>,
     },
 
     Codegen {
@@ -411,7 +402,16 @@ define_queries! { <'tcx>
         [] fn is_copy_raw: is_copy_dep_node(ty::ParamEnvAnd<'tcx, Ty<'tcx>>) -> bool,
         [] fn is_sized_raw: is_sized_dep_node(ty::ParamEnvAnd<'tcx, Ty<'tcx>>) -> bool,
         [] fn is_freeze_raw: is_freeze_dep_node(ty::ParamEnvAnd<'tcx, Ty<'tcx>>) -> bool,
-        [] fn needs_drop_raw: needs_drop_dep_node(ty::ParamEnvAnd<'tcx, Ty<'tcx>>) -> bool,
+
+        // The cycle error here should be reported as an error by `check_representable`.
+        // We consider the type as not needing drop in the meanwhile to avoid
+        // further errors (done in impl Value for NeedsDrop).
+        // Use `cycle_delay_bug` to delay the cycle error here to be emitted later
+        // in case we accidentally otherwise don't emit an error.
+        [cycle_delay_bug] fn needs_drop_raw: needs_drop_dep_node(
+            ty::ParamEnvAnd<'tcx, Ty<'tcx>>
+        ) -> NeedsDrop,
+
         [] fn layout_raw: layout_dep_node(ty::ParamEnvAnd<'tcx, Ty<'tcx>>)
                                     -> Result<&'tcx ty::layout::LayoutDetails,
                                                 ty::layout::LayoutError<'tcx>>,
@@ -423,7 +423,6 @@ define_queries! { <'tcx>
     },
 
     Codegen {
-        [fatal_cycle] fn is_panic_runtime: IsPanicRuntime(CrateNum) -> bool,
         [fatal_cycle] fn is_compiler_builtins: IsCompilerBuiltins(CrateNum) -> bool,
         [fatal_cycle] fn has_global_allocator: HasGlobalAllocator(CrateNum) -> bool,
         [fatal_cycle] fn has_panic_handler: HasPanicHandler(CrateNum) -> bool,
@@ -475,14 +474,12 @@ define_queries! { <'tcx>
 
     Codegen {
         [] fn upstream_monomorphizations: UpstreamMonomorphizations(CrateNum)
-            -> Lrc<DefIdMap<Lrc<FxHashMap<&'tcx Substs<'tcx>, CrateNum>>>>,
+            -> Lrc<DefIdMap<Lrc<FxHashMap<SubstsRef<'tcx>, CrateNum>>>>,
         [] fn upstream_monomorphizations_for: UpstreamMonomorphizationsFor(DefId)
-            -> Option<Lrc<FxHashMap<&'tcx Substs<'tcx>, CrateNum>>>,
+            -> Option<Lrc<FxHashMap<SubstsRef<'tcx>, CrateNum>>>,
     },
 
     Other {
-        [] fn native_libraries: NativeLibraries(CrateNum) -> Lrc<Vec<NativeLibrary>>,
-
         [] fn foreign_modules: ForeignModules(CrateNum) -> Lrc<Vec<ForeignModule>>,
 
         /// Identifies the entry-point (e.g., the `main` function) for a given
@@ -696,7 +693,7 @@ define_queries! { <'tcx>
         >,
 
         [] fn substitute_normalize_and_test_predicates:
-            substitute_normalize_and_test_predicates_node((DefId, &'tcx Substs<'tcx>)) -> bool,
+            substitute_normalize_and_test_predicates_node((DefId, SubstsRef<'tcx>)) -> bool,
 
         [] fn method_autoderef_steps: MethodAutoderefSteps(
             CanonicalTyGoal<'tcx>
@@ -729,33 +726,7 @@ define_queries! { <'tcx>
         [] fn wasm_import_module_map: WasmImportModuleMap(CrateNum)
             -> Lrc<FxHashMap<DefId, String>>,
     },
-}
-
-// `try_get_query` can't be public because it uses the private query
-// implementation traits, so we provide access to it selectively.
-impl<'a, 'tcx, 'lcx> TyCtxt<'a, 'tcx, 'lcx> {
-    pub fn try_adt_sized_constraint(
-        self,
-        span: Span,
-        key: DefId,
-    ) -> Result<&'tcx [Ty<'tcx>], Box<DiagnosticBuilder<'a>>> {
-        self.try_get_query::<queries::adt_sized_constraint<'_>>(span, key)
-    }
-    pub fn try_needs_drop_raw(
-        self,
-        span: Span,
-        key: ty::ParamEnvAnd<'tcx, Ty<'tcx>>,
-    ) -> Result<bool, Box<DiagnosticBuilder<'a>>> {
-        self.try_get_query::<queries::needs_drop_raw<'_>>(span, key)
-    }
-    pub fn try_optimized_mir(
-        self,
-        span: Span,
-        key: DefId,
-    ) -> Result<&'tcx mir::Mir<'tcx>, Box<DiagnosticBuilder<'a>>> {
-        self.try_get_query::<queries::optimized_mir<'_>>(span, key)
-    }
-}
+]}
 
 //////////////////////////////////////////////////////////////////////
 // These functions are little shims used to find the dep-node for a
@@ -914,7 +885,7 @@ fn vtable_methods_node<'tcx>(trait_ref: ty::PolyTraitRef<'tcx>) -> DepConstructo
     DepConstructor::VtableMethods{ trait_ref }
 }
 
-fn substitute_normalize_and_test_predicates_node<'tcx>(key: (DefId, &'tcx Substs<'tcx>))
+fn substitute_normalize_and_test_predicates_node<'tcx>(key: (DefId, SubstsRef<'tcx>))
                                             -> DepConstructor<'tcx> {
     DepConstructor::SubstituteNormalizeAndTestPredicates { key }
 }

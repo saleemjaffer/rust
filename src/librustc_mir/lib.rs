@@ -7,7 +7,6 @@ Rust MIR: a lowered representation of Rust. Also: an experiment!
 #![feature(nll)]
 #![feature(in_band_lifetimes)]
 #![feature(slice_patterns)]
-#![feature(slice_sort_by_cached_key)]
 #![feature(box_patterns)]
 #![feature(box_syntax)]
 #![feature(crate_visibility_modifier)]
@@ -15,7 +14,6 @@ Rust MIR: a lowered representation of Rust. Also: an experiment!
 #![feature(const_fn)]
 #![feature(decl_macro)]
 #![feature(exhaustive_patterns)]
-#![feature(range_contains)]
 #![feature(rustc_diagnostic_macros)]
 #![feature(rustc_attrs)]
 #![feature(never_type)]
@@ -24,7 +22,6 @@ Rust MIR: a lowered representation of Rust. Also: an experiment!
 #![feature(unicode_internals)]
 #![feature(step_trait)]
 #![feature(slice_concat_ext)]
-#![feature(try_from)]
 #![feature(reverse_bits)]
 #![feature(try_blocks)]
 
@@ -56,7 +53,6 @@ pub mod interpret;
 pub mod monomorphize;
 pub mod const_eval;
 
-pub use hair::pattern::check_crate as matchck_crate;
 use rustc::ty::query::Providers;
 
 pub fn provide(providers: &mut Providers<'_>) {

@@ -823,7 +823,7 @@ impl FusedIterator for Bytes<'_> {}
 unsafe impl TrustedLen for Bytes<'_> {}
 
 #[doc(hidden)]
-unsafe impl<'a> TrustedRandomAccess for Bytes<'a> {
+unsafe impl TrustedRandomAccess for Bytes<'_> {
     unsafe fn get_unchecked(&mut self, i: usize) -> u8 {
         self.0.get_unchecked(i)
     }
@@ -2968,7 +2968,7 @@ impl str {
     ///
     /// The returned iterator will be a [`DoubleEndedIterator`] if the pattern
     /// allows a reverse search and forward/reverse search yields the same
-    /// elements. This is true for, eg, [`char`] but not for `&str`.
+    /// elements. This is true for, e.g., [`char`], but not for `&str`.
     ///
     /// [`DoubleEndedIterator`]: iter/trait.DoubleEndedIterator.html
     ///
@@ -3143,7 +3143,7 @@ impl str {
     ///
     /// The returned iterator will be a [`DoubleEndedIterator`] if the pattern
     /// allows a reverse search and forward/reverse search yields the same
-    /// elements. This is true for, eg, [`char`] but not for `&str`.
+    /// elements. This is true for, e.g., [`char`], but not for `&str`.
     ///
     /// [`DoubleEndedIterator`]: iter/trait.DoubleEndedIterator.html
     ///
@@ -3326,7 +3326,7 @@ impl str {
     ///
     /// The returned iterator will be a [`DoubleEndedIterator`] if the pattern
     /// allows a reverse search and forward/reverse search yields the same
-    /// elements. This is true for, eg, [`char`] but not for `&str`.
+    /// elements. This is true for, e.g., [`char`], but not for `&str`.
     ///
     /// [`DoubleEndedIterator`]: iter/trait.DoubleEndedIterator.html
     ///
@@ -3402,7 +3402,7 @@ impl str {
     ///
     /// The returned iterator will be a [`DoubleEndedIterator`] if the pattern
     /// allows a reverse search and forward/reverse search yields the same
-    /// elements. This is true for, eg, [`char`] but not for `&str`.
+    /// elements. This is true for, e.g., [`char`], but not for `&str`.
     ///
     /// [`DoubleEndedIterator`]: iter/trait.DoubleEndedIterator.html
     ///
@@ -3965,7 +3965,7 @@ impl str {
         me.make_ascii_lowercase()
     }
 
-    /// Return an iterator that escapes each char in `s` with [`char::escape_debug`].
+    /// Return an iterator that escapes each char in `self` with [`char::escape_debug`].
     ///
     /// Note: only extended grapheme codepoints that begin the string will be
     /// escaped.
@@ -4013,7 +4013,7 @@ impl str {
         }
     }
 
-    /// Return an iterator that escapes each char in `s` with [`char::escape_default`].
+    /// Return an iterator that escapes each char in `self` with [`char::escape_default`].
     ///
     /// [`char::escape_default`]: ../std/primitive.char.html#method.escape_default
     ///
@@ -4051,7 +4051,7 @@ impl str {
         EscapeDefault { inner: self.chars().flat_map(CharEscapeDefault) }
     }
 
-    /// Return an iterator that escapes each char in `s` with [`char::escape_unicode`].
+    /// Return an iterator that escapes each char in `self` with [`char::escape_unicode`].
     ///
     /// [`char::escape_unicode`]: ../std/primitive.char.html#method.escape_unicode
     ///

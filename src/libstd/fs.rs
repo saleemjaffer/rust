@@ -7,13 +7,13 @@
 
 #![stable(feature = "rust1", since = "1.0.0")]
 
-use fmt;
-use ffi::OsString;
-use io::{self, SeekFrom, Seek, Read, Initializer, Write};
-use path::{Path, PathBuf};
-use sys::fs as fs_imp;
-use sys_common::{AsInnerMut, FromInner, AsInner, IntoInner};
-use time::SystemTime;
+use crate::fmt;
+use crate::ffi::OsString;
+use crate::io::{self, SeekFrom, Seek, Read, Initializer, Write};
+use crate::path::{Path, PathBuf};
+use crate::sys::fs as fs_imp;
+use crate::sys_common::{AsInnerMut, FromInner, AsInner, IntoInner};
+use crate::time::SystemTime;
 
 /// A reference to an open file on the filesystem.
 ///
@@ -211,7 +211,7 @@ pub struct DirBuilder {
     recursive: bool,
 }
 
-/// How large a buffer to pre-allocate before reading the entire file.
+/// Indicates how large a buffer to pre-allocate before reading the entire file.
 fn initial_buffer_size(file: &File) -> usize {
     // Allocate one extra byte so the buffer doesn't need to grow before the
     // final `read` call at the end of the file.  Don't worry about `usize`
@@ -254,10 +254,13 @@ fn initial_buffer_size(file: &File) -> usize {
 /// ```
 #[stable(feature = "fs_read_write_bytes", since = "1.26.0")]
 pub fn read<P: AsRef<Path>>(path: P) -> io::Result<Vec<u8>> {
-    let mut file = File::open(path)?;
-    let mut bytes = Vec::with_capacity(initial_buffer_size(&file));
-    file.read_to_end(&mut bytes)?;
-    Ok(bytes)
+    fn inner(path: &Path) -> io::Result<Vec<u8>> {
+        let mut file = File::open(path)?;
+        let mut bytes = Vec::with_capacity(initial_buffer_size(&file));
+        file.read_to_end(&mut bytes)?;
+        Ok(bytes)
+    }
+    inner(path.as_ref())
 }
 
 /// Read the entire contents of a file into a string.
@@ -296,10 +299,13 @@ pub fn read<P: AsRef<Path>>(path: P) -> io::Result<Vec<u8>> {
 /// ```
 #[stable(feature = "fs_read_write", since = "1.26.0")]
 pub fn read_to_string<P: AsRef<Path>>(path: P) -> io::Result<String> {
-    let mut file = File::open(path)?;
-    let mut string = String::with_capacity(initial_buffer_size(&file));
-    file.read_to_string(&mut string)?;
-    Ok(string)
+    fn inner(path: &Path) -> io::Result<String> {
+        let mut file = File::open(path)?;
+        let mut string = String::with_capacity(initial_buffer_size(&file));
+        file.read_to_string(&mut string)?;
+        Ok(string)
+    }
+    inner(path.as_ref())
 }
 
 /// Write a slice as the entire contents of a file.
@@ -326,7 +332,10 @@ pub fn read_to_string<P: AsRef<Path>>(path: P) -> io::Result<String> {
 /// ```
 #[stable(feature = "fs_read_write_bytes", since = "1.26.0")]
 pub fn write<P: AsRef<Path>, C: AsRef<[u8]>>(path: P, contents: C) -> io::Result<()> {
-    File::create(path)?.write_all(contents.as_ref())
+    fn inner(path: &Path, contents: &[u8]) -> io::Result<()> {
+        File::create(path)?.write_all(contents)
+    }
+    inner(path.as_ref(), contents.as_ref())
 }
 
 impl File {
@@ -618,7 +627,7 @@ impl Seek for File {
     }
 }
 #[stable(feature = "rust1", since = "1.0.0")]
-impl<'a> Read for &'a File {
+impl Read for &File {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         self.inner.read(buf)
     }
@@ -629,14 +638,14 @@ impl<'a> Read for &'a File {
     }
 }
 #[stable(feature = "rust1", since = "1.0.0")]
-impl<'a> Write for &'a File {
+impl Write for &File {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.inner.write(buf)
     }
     fn flush(&mut self) -> io::Result<()> { self.inner.flush() }
 }
 #[stable(feature = "rust1", since = "1.0.0")]
-impl<'a> Seek for &'a File {
+impl Seek for &File {
     fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
         self.inner.seek(pos)
     }
@@ -1572,7 +1581,8 @@ pub fn rename<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<()> 
 /// `O_CLOEXEC` is set for returned file descriptors.
 /// On Windows, this function currently corresponds to `CopyFileEx`. Alternate
 /// NTFS streams are copied but only the size of the main stream is returned by
-/// this function.
+/// this function. On MacOS, this function corresponds to `copyfile` with
+/// `COPYFILE_ALL`.
 /// Note that, this [may change in the future][changes].
 ///
 /// [changes]: ../io/index.html#platform-specific-behavior
@@ -2085,28 +2095,29 @@ impl AsInnerMut<fs_imp::DirBuilder> for DirBuilder {
     }
 }
 
-#[cfg(all(test, not(any(target_os = "cloudabi", target_os = "emscripten"))))]
+#[cfg(all(test, not(any(target_os = "cloudabi", target_os = "emscripten", target_env = "sgx"))))]
 mod tests {
-    use io::prelude::*;
+    use crate::io::prelude::*;
 
-    use fs::{self, File, OpenOptions};
-    use io::{ErrorKind, SeekFrom};
-    use path::Path;
+    use crate::fs::{self, File, OpenOptions};
+    use crate::io::{ErrorKind, SeekFrom};
+    use crate::path::Path;
+    use crate::str;
+    use crate::sys_common::io::test::{TempDir, tmpdir};
+    use crate::thread;
+
     use rand::{rngs::StdRng, FromEntropy, RngCore};
-    use str;
-    use sys_common::io::test::{TempDir, tmpdir};
-    use thread;
 
     #[cfg(windows)]
-    use os::windows::fs::{symlink_dir, symlink_file};
+    use crate::os::windows::fs::{symlink_dir, symlink_file};
     #[cfg(windows)]
-    use sys::fs::symlink_junction;
+    use crate::sys::fs::symlink_junction;
     #[cfg(unix)]
-    use os::unix::fs::symlink as symlink_dir;
+    use crate::os::unix::fs::symlink as symlink_dir;
     #[cfg(unix)]
-    use os::unix::fs::symlink as symlink_file;
+    use crate::os::unix::fs::symlink as symlink_file;
     #[cfg(unix)]
-    use os::unix::fs::symlink as symlink_junction;
+    use crate::os::unix::fs::symlink as symlink_junction;
 
     macro_rules! check { ($e:expr) => (
         match $e {
@@ -2325,7 +2336,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn file_test_io_read_write_at() {
-        use os::unix::fs::FileExt;
+        use crate::os::unix::fs::FileExt;
 
         let tmpdir = tmpdir();
         let filename = tmpdir.join("file_rt_io_file_test_read_write_at.txt");
@@ -2381,7 +2392,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn set_get_unix_permissions() {
-        use os::unix::fs::PermissionsExt;
+        use crate::os::unix::fs::PermissionsExt;
 
         let tmpdir = tmpdir();
         let filename = &tmpdir.join("set_get_unix_permissions");
@@ -2402,7 +2413,7 @@ mod tests {
     #[test]
     #[cfg(windows)]
     fn file_test_io_seek_read_write() {
-        use os::windows::fs::FileExt;
+        use crate::os::windows::fs::FileExt;
 
         let tmpdir = tmpdir();
         let filename = tmpdir.join("file_rt_io_file_test_seek_read_write.txt");
@@ -2827,6 +2838,26 @@ mod tests {
     }
 
     #[test]
+    fn copy_file_follows_dst_symlink() {
+        let tmp = tmpdir();
+        if !got_symlink_permission(&tmp) { return };
+
+        let in_path = tmp.join("in.txt");
+        let out_path = tmp.join("out.txt");
+        let out_path_symlink = tmp.join("out_symlink.txt");
+
+        check!(fs::write(&in_path, "foo"));
+        check!(fs::write(&out_path, "bar"));
+        check!(symlink_file(&out_path, &out_path_symlink));
+
+        check!(fs::copy(&in_path, &out_path_symlink));
+
+        assert!(check!(out_path_symlink.symlink_metadata()).file_type().is_symlink());
+        assert_eq!(check!(fs::read(&out_path_symlink)), b"foo".to_vec());
+        assert_eq!(check!(fs::read(&out_path)), b"foo".to_vec());
+    }
+
+    #[test]
     fn symlinks_work() {
         let tmpdir = tmpdir();
         if !got_symlink_permission(&tmpdir) { return };
@@ -3004,7 +3035,7 @@ mod tests {
 
     #[test]
     fn open_flavors() {
-        use fs::OpenOptions as OO;
+        use crate::fs::OpenOptions as OO;
         fn c<T: Clone>(t: &T) -> T { t.clone() }
 
         let tmpdir = tmpdir();

@@ -15,11 +15,11 @@
 #![allow(missing_docs)]
 #![allow(missing_debug_implementations)]
 
-use sync::Once;
-use sys;
+use crate::sync::Once;
+use crate::sys;
 
 macro_rules! rtabort {
-    ($($t:tt)*) => (::sys_common::util::abort(format_args!($($t)*)))
+    ($($t:tt)*) => (crate::sys_common::util::abort(format_args!($($t)*)))
 }
 
 macro_rules! rtassert {
@@ -35,6 +35,13 @@ pub mod backtrace;
 pub mod condvar;
 pub mod io;
 pub mod mutex;
+#[cfg(any(rustdoc, // see `mod os`, docs are generated for multiple platforms
+          unix,
+          target_os = "redox",
+          target_os = "cloudabi",
+          target_arch = "wasm32",
+          all(target_vendor = "fortanix", target_env = "sgx")))]
+pub mod os_str_bytes;
 pub mod poison;
 pub mod remutex;
 pub mod rwlock;
@@ -52,7 +59,7 @@ cfg_if! {
                  target_os = "redox",
                  all(target_arch = "wasm32", not(target_os = "emscripten")),
                  all(target_vendor = "fortanix", target_env = "sgx")))] {
-        pub use sys::net;
+        pub use crate::sys::net;
     } else {
         pub mod net;
     }

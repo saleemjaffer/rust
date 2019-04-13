@@ -67,7 +67,7 @@ use crate::traits::query::{
 };
 use crate::ty::{TyCtxt, FnSig, Instance, InstanceDef,
          ParamEnv, ParamEnvAnd, Predicate, PolyFnSig, PolyTraitRef, Ty};
-use crate::ty::subst::Substs;
+use crate::ty::subst::SubstsRef;
 
 // erase!() just makes tokens go away. It's used to specify which macro argument
 // is repeated (i.e., which sub-expression of the macro we are in) but don't need
@@ -111,7 +111,7 @@ macro_rules! define_dep_nodes {
     (<$tcx:tt>
     $(
         [$($attr:ident),* ]
-        $variant:ident $(( $tuple_arg_ty:ty $(,)* ))*
+        $variant:ident $(( $tuple_arg_ty:ty $(,)? ))*
                        $({ $($struct_arg_name:ident : $struct_arg_ty:ty),* })*
       ,)*
     ) => (
@@ -423,7 +423,7 @@ impl DefId {
     }
 }
 
-define_dep_nodes!( <'tcx>
+rustc_dep_node_append!([define_dep_nodes!][ <'tcx>
     // We use this for most things when incr. comp. is turned off.
     [] Null,
 
@@ -456,6 +456,8 @@ define_dep_nodes!( <'tcx>
     [eval_always] CoherenceInherentImplOverlapCheck,
     [] CoherenceCheckTrait(DefId),
     [eval_always] PrivacyAccessLevels(CrateNum),
+    [eval_always] CheckPrivateInPublic(CrateNum),
+    [eval_always] Analysis(CrateNum),
 
     // Represents the MIR for a fn; also used as the task node for
     // things read/modify that MIR.
@@ -490,9 +492,6 @@ define_dep_nodes!( <'tcx>
     // table in the tcx (or elsewhere) maps to one of these
     // nodes.
     [] AssociatedItems(DefId),
-    [] TypeOfItem(DefId),
-    [] GenericsOfItem(DefId),
-    [] PredicatesOfItem(DefId),
     [] ExplicitPredicatesOfItem(DefId),
     [] PredicatesDefinedOnItem(DefId),
     [] InferredOutlivesOf(DefId),
@@ -568,7 +567,6 @@ define_dep_nodes!( <'tcx>
     [] FnArgNames(DefId),
     [] RenderedConst(DefId),
     [] DylibDepFormats(CrateNum),
-    [] IsPanicRuntime(CrateNum),
     [] IsCompilerBuiltins(CrateNum),
     [] HasGlobalAllocator(CrateNum),
     [] HasPanicHandler(CrateNum),
@@ -586,7 +584,6 @@ define_dep_nodes!( <'tcx>
     [] CheckTraitItemWellFormed(DefId),
     [] CheckImplItemWellFormed(DefId),
     [] ReachableNonGenerics(CrateNum),
-    [] NativeLibraries(CrateNum),
     [] EntryFn(CrateNum),
     [] PluginRegistrarFn(CrateNum),
     [] ProcMacroDeclsStatic(CrateNum),
@@ -661,7 +658,7 @@ define_dep_nodes!( <'tcx>
     [] TypeOpNormalizePolyFnSig(CanonicalTypeOpNormalizeGoal<'tcx, PolyFnSig<'tcx>>),
     [] TypeOpNormalizeFnSig(CanonicalTypeOpNormalizeGoal<'tcx, FnSig<'tcx>>),
 
-    [] SubstituteNormalizeAndTestPredicates { key: (DefId, &'tcx Substs<'tcx>) },
+    [] SubstituteNormalizeAndTestPredicates { key: (DefId, SubstsRef<'tcx>) },
     [] MethodAutoderefSteps(CanonicalTyGoal<'tcx>),
 
     [input] TargetFeaturesWhitelist,
@@ -677,7 +674,23 @@ define_dep_nodes!( <'tcx>
 
     [] UpstreamMonomorphizations(CrateNum),
     [] UpstreamMonomorphizationsFor(DefId),
-);
+]);
+
+pub trait RecoverKey<'tcx>: Sized {
+    fn recover(tcx: TyCtxt<'_, 'tcx, 'tcx>, dep_node: &DepNode) -> Option<Self>;
+}
+
+impl RecoverKey<'tcx> for CrateNum {
+    fn recover(tcx: TyCtxt<'_, 'tcx, 'tcx>, dep_node: &DepNode) -> Option<Self> {
+        dep_node.extract_def_id(tcx).map(|id| id.krate)
+    }
+}
+
+impl RecoverKey<'tcx> for DefId {
+    fn recover(tcx: TyCtxt<'_, 'tcx, 'tcx>, dep_node: &DepNode) -> Option<Self> {
+        dep_node.extract_def_id(tcx)
+    }
+}
 
 trait DepNodeParams<'a, 'gcx: 'tcx + 'a, 'tcx: 'a> : fmt::Debug {
     const CAN_RECONSTRUCT_QUERY_KEY: bool;
@@ -722,7 +735,7 @@ impl<'a, 'gcx: 'tcx + 'a, 'tcx: 'a> DepNodeParams<'a, 'gcx, 'tcx> for DefId {
     }
 
     fn to_debug_str(&self, tcx: TyCtxt<'a, 'gcx, 'tcx>) -> String {
-        tcx.item_path_str(*self)
+        tcx.def_path_str(*self)
     }
 }
 
@@ -734,7 +747,7 @@ impl<'a, 'gcx: 'tcx + 'a, 'tcx: 'a> DepNodeParams<'a, 'gcx, 'tcx> for DefIndex {
     }
 
     fn to_debug_str(&self, tcx: TyCtxt<'a, 'gcx, 'tcx>) -> String {
-        tcx.item_path_str(DefId::local(*self))
+        tcx.def_path_str(DefId::local(*self))
     }
 }
 

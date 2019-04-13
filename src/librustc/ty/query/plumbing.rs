@@ -4,11 +4,10 @@
 
 use crate::dep_graph::{DepNodeIndex, DepNode, DepKind, SerializedDepNodeIndex};
 use crate::ty::tls;
-use crate::ty::{TyCtxt};
+use crate::ty::{self, TyCtxt};
 use crate::ty::query::Query;
 use crate::ty::query::config::{QueryConfig, QueryDescription};
 use crate::ty::query::job::{QueryJob, QueryResult, QueryInfo};
-use crate::ty::item_path;
 
 use crate::util::common::{profq_msg, ProfileQueriesMsg, QueryMsg};
 
@@ -19,6 +18,8 @@ use errors::FatalError;
 use rustc_data_structures::fx::{FxHashMap};
 use rustc_data_structures::sync::{Lrc, Lock};
 use rustc_data_structures::thin_vec::ThinVec;
+#[cfg(not(parallel_compiler))]
+use rustc_data_structures::cold_path;
 use std::mem;
 use std::ptr;
 use std::collections::hash_map::Entry;
@@ -114,7 +115,7 @@ impl<'a, 'tcx, Q: QueryDescription<'tcx>> JobOwner<'a, 'tcx, Q> {
             if let Some(value) = lock.results.get(key) {
                 profq_msg!(tcx, ProfileQueriesMsg::CacheHit);
                 tcx.sess.profiler(|p| p.record_query_hit(Q::NAME, Q::CATEGORY));
-                let result = Ok((value.value.clone(), value.index));
+                let result = (value.value.clone(), value.index);
                 #[cfg(debug_assertions)]
                 {
                     lock.cache_hits += 1;
@@ -160,9 +161,11 @@ impl<'a, 'tcx, Q: QueryDescription<'tcx>> JobOwner<'a, 'tcx, Q> {
             mem::drop(lock);
 
             // If we are single-threaded we know that we have cycle error,
-            // so we just turn the errror
+            // so we just return the error
             #[cfg(not(parallel_compiler))]
-            return job.cycle_error(tcx, span);
+            return TryGetJob::Cycle(cold_path(|| {
+                Q::handle_cycle_error(tcx, job.find_cycle_in_stack(tcx, span))
+            }));
 
             // With parallel queries we might just have to wait on some other
             // thread
@@ -172,7 +175,7 @@ impl<'a, 'tcx, Q: QueryDescription<'tcx>> JobOwner<'a, 'tcx, Q> {
                 tcx.sess.profiler(|p| p.query_blocked_end(Q::NAME, Q::CATEGORY));
 
                 if let Err(cycle) = result {
-                    return TryGetJob::JobCompleted(Err(cycle));
+                    return TryGetJob::Cycle(Q::handle_cycle_error(tcx, cycle));
                 }
             }
         }
@@ -238,7 +241,10 @@ pub(super) enum TryGetJob<'a, 'tcx: 'a, D: QueryDescription<'tcx> + 'a> {
     /// The query was already completed.
     /// Returns the result of the query and its dep node index
     /// if it succeeded or a cycle error if it failed
-    JobCompleted(Result<(D::Value, DepNodeIndex), Box<CycleError<'tcx>>>),
+    JobCompleted((D::Value, DepNodeIndex)),
+
+    /// Trying to execute the query resulted in a cycle.
+    Cycle(D::Value),
 }
 
 impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
@@ -279,8 +285,8 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
     #[cold]
     pub(super) fn report_cycle(
         self,
-        box CycleError { usage, cycle: stack }: Box<CycleError<'gcx>>
-    ) -> Box<DiagnosticBuilder<'a>>
+        CycleError { usage, cycle: stack }: CycleError<'gcx>
+    ) -> DiagnosticBuilder<'a>
     {
         assert!(!stack.is_empty());
 
@@ -292,7 +298,7 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
         // sometimes cycles itself, leading to extra cycle errors.
         // (And cycle errors around impls tend to occur during the
         // collect/coherence phases anyhow.)
-        item_path::with_forced_impl_filename_line(|| {
+        ty::print::with_forced_impl_filename_line(|| {
             let span = fix_span(stack[1 % stack.len()].span, &stack[0].query);
             let mut err = struct_span_err!(self.sess,
                                            span,
@@ -314,7 +320,7 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
                               &format!("cycle used when {}", query.describe(self)));
             }
 
-            return Box::new(err)
+            err
         })
     }
 
@@ -346,13 +352,12 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
     }
 
     #[inline(never)]
-    fn try_get_with<Q: QueryDescription<'gcx>>(
+    pub(super) fn get_query<Q: QueryDescription<'gcx>>(
         self,
         span: Span,
         key: Q::Key)
-    -> Result<Q::Value, Box<CycleError<'gcx>>>
-    {
-        debug!("ty::queries::{}::try_get_with(key={:?}, span={:?})",
+    -> Q::Value {
+        debug!("ty::query::get_query<{}>(key={:?}, span={:?})",
                Q::NAME,
                key,
                span);
@@ -366,11 +371,10 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
 
         let job = match JobOwner::try_get(self, span, &key) {
             TryGetJob::NotYetStarted(job) => job,
-            TryGetJob::JobCompleted(result) => {
-                return result.map(|(v, index)| {
-                    self.dep_graph.read_index(index);
-                    v
-                })
+            TryGetJob::Cycle(result) => return result,
+            TryGetJob::JobCompleted((v, index)) => {
+                self.dep_graph.read_index(index);
+                return v
             }
         };
 
@@ -378,7 +382,7 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
         // expensive for some DepKinds.
         if !self.dep_graph.is_fully_enabled() {
             let null_dep_node = DepNode::new_no_params(crate::dep_graph::DepKind::Null);
-            return Ok(self.force_query_with_job::<Q>(key, job, null_dep_node).0);
+            return self.force_query_with_job::<Q>(key, job, null_dep_node).0;
         }
 
         let dep_node = Q::to_dep_node(self, &key);
@@ -407,7 +411,7 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
 
             job.complete(&result, dep_node_index);
 
-            return Ok(result);
+            return result;
         }
 
         if !dep_node.kind.is_input() {
@@ -427,13 +431,13 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
             });
             if let Some((result, dep_node_index)) = loaded {
                 job.complete(&result, dep_node_index);
-                return Ok(result);
+                return result;
             }
         }
 
         let (result, dep_node_index) = self.force_query_with_job::<Q>(key, job, dep_node);
         self.dep_graph.read_index(dep_node_index);
-        Ok(result)
+        result
     }
 
     fn load_from_disk_and_cache_in_memory<Q: QueryDescription<'gcx>>(
@@ -631,57 +635,28 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
         // Ensure that only one of them runs the query
         let job = match JobOwner::try_get(self, span, &key) {
             TryGetJob::NotYetStarted(job) => job,
-            TryGetJob::JobCompleted(result) => {
-                if let Err(e) = result {
-                    self.report_cycle(e).emit();
-                }
+            TryGetJob::Cycle(_) |
+            TryGetJob::JobCompleted(_) => {
                 return
             }
         };
         self.force_query_with_job::<Q>(key, job, dep_node);
     }
-
-    pub(super) fn try_get_query<Q: QueryDescription<'gcx>>(
-        self,
-        span: Span,
-        key: Q::Key,
-    ) -> Result<Q::Value, Box<DiagnosticBuilder<'a>>> {
-        match self.try_get_with::<Q>(span, key) {
-            Ok(e) => Ok(e),
-            Err(e) => Err(self.report_cycle(e)),
-        }
-    }
-
-    // FIXME: Try uninlining this
-    #[inline(always)]
-    pub(super) fn get_query<Q: QueryDescription<'gcx>>(
-        self,
-        span: Span,
-        key: Q::Key,
-    ) -> Q::Value {
-        self.try_get_with::<Q>(span, key).unwrap_or_else(|e| {
-            self.emit_error::<Q>(e)
-        })
-    }
-
-    #[inline(never)]
-    #[cold]
-    fn emit_error<Q: QueryDescription<'gcx>>(
-        self,
-        e: Box<CycleError<'gcx>>,
-    ) -> Q::Value {
-        self.report_cycle(e).emit();
-        Q::handle_cycle_error(self)
-    }
 }
 
 macro_rules! handle_cycle_error {
-    ([][$this: expr]) => {{
-        Value::from_cycle_error($this.global_tcx())
+    ([][$tcx: expr, $error:expr]) => {{
+        $tcx.report_cycle($error).emit();
+        Value::from_cycle_error($tcx.global_tcx())
     }};
-    ([fatal_cycle$(, $modifiers:ident)*][$this:expr]) => {{
-        $this.sess.abort_if_errors();
-        unreachable!();
+    ([fatal_cycle$(, $modifiers:ident)*][$tcx:expr, $error:expr]) => {{
+        $tcx.report_cycle($error).emit();
+        $tcx.sess.abort_if_errors();
+        unreachable!()
+    }};
+    ([cycle_delay_bug$(, $modifiers:ident)*][$tcx:expr, $error:expr]) => {{
+        $tcx.report_cycle($error).delay_as_bug();
+        Value::from_cycle_error($tcx.global_tcx())
     }};
     ([$other:ident$(, $modifiers:ident)*][$($args:tt)*]) => {
         handle_cycle_error!([$($modifiers),*][$($args)*])
@@ -995,8 +970,11 @@ macro_rules! define_queries_inner {
                 hash_result!([$($modifiers)*][_hcx, _result])
             }
 
-            fn handle_cycle_error(tcx: TyCtxt<'_, 'tcx, '_>) -> Self::Value {
-                handle_cycle_error!([$($modifiers)*][tcx])
+            fn handle_cycle_error(
+                tcx: TyCtxt<'_, 'tcx, '_>,
+                error: CycleError<'tcx>
+            ) -> Self::Value {
+                handle_cycle_error!([$($modifiers)*][tcx, error])
             }
         })*
 
@@ -1153,10 +1131,12 @@ macro_rules! define_provider_struct {
 /// then `force_from_dep_node()` should not fail for it. Otherwise, you can just
 /// add it to the "We don't have enough information to reconstruct..." group in
 /// the match below.
-pub fn force_from_dep_node<'a, 'gcx, 'lcx>(tcx: TyCtxt<'a, 'gcx, 'lcx>,
-                                           dep_node: &DepNode)
-                                           -> bool {
+pub fn force_from_dep_node<'tcx>(
+    tcx: TyCtxt<'_, 'tcx, 'tcx>,
+    dep_node: &DepNode
+) -> bool {
     use crate::hir::def_id::LOCAL_CRATE;
+    use crate::dep_graph::RecoverKey;
 
     // We must avoid ever having to call force_from_dep_node() for a
     // DepNode::CodegenUnit:
@@ -1193,17 +1173,26 @@ pub fn force_from_dep_node<'a, 'gcx, 'lcx>(tcx: TyCtxt<'a, 'gcx, 'lcx>,
         () => { (def_id!()).krate }
     };
 
-    macro_rules! force {
-        ($query:ident, $key:expr) => {
+    macro_rules! force_ex {
+        ($tcx:expr, $query:ident, $key:expr) => {
             {
-                tcx.force_query::<crate::ty::query::queries::$query<'_>>($key, DUMMY_SP, *dep_node);
+                $tcx.force_query::<crate::ty::query::queries::$query<'_>>(
+                    $key,
+                    DUMMY_SP,
+                    *dep_node
+                );
             }
         }
     };
 
+    macro_rules! force {
+        ($query:ident, $key:expr) => { force_ex!(tcx, $query, $key) }
+    };
+
     // FIXME(#45015): We should try move this boilerplate code into a macro
     //                somehow.
-    match dep_node.kind {
+
+    rustc_dep_node_force!([dep_node, tcx]
         // These are inputs that are expected to be pre-allocated and that
         // should therefore always be red or green already
         DepKind::AllLocalTraitImpls |
@@ -1272,6 +1261,7 @@ pub fn force_from_dep_node<'a, 'gcx, 'lcx>(tcx: TyCtxt<'a, 'gcx, 'lcx>,
             force!(crate_inherent_impls_overlap_check, LOCAL_CRATE)
         },
         DepKind::PrivacyAccessLevels => { force!(privacy_access_levels, LOCAL_CRATE); }
+        DepKind::CheckPrivateInPublic => { force!(check_private_in_public, LOCAL_CRATE); }
         DepKind::MirBuilt => { force!(mir_built, def_id!()); }
         DepKind::MirConstQualif => { force!(mir_const_qualif, def_id!()); }
         DepKind::MirConst => { force!(mir_const, def_id!()); }
@@ -1295,9 +1285,6 @@ pub fn force_from_dep_node<'a, 'gcx, 'lcx>(tcx: TyCtxt<'a, 'gcx, 'lcx>,
         DepKind::MirKeys => { force!(mir_keys, LOCAL_CRATE); }
         DepKind::CrateVariances => { force!(crate_variances, LOCAL_CRATE); }
         DepKind::AssociatedItems => { force!(associated_item, def_id!()); }
-        DepKind::TypeOfItem => { force!(type_of, def_id!()); }
-        DepKind::GenericsOfItem => { force!(generics_of, def_id!()); }
-        DepKind::PredicatesOfItem => { force!(predicates_of, def_id!()); }
         DepKind::PredicatesDefinedOnItem => { force!(predicates_defined_on, def_id!()); }
         DepKind::ExplicitPredicatesOfItem => { force!(explicit_predicates_of, def_id!()); }
         DepKind::InferredOutlivesOf => { force!(inferred_outlives_of, def_id!()); }
@@ -1353,7 +1340,6 @@ pub fn force_from_dep_node<'a, 'gcx, 'lcx>(tcx: TyCtxt<'a, 'gcx, 'lcx>,
         DepKind::FnArgNames => { force!(fn_arg_names, def_id!()); }
         DepKind::RenderedConst => { force!(rendered_const, def_id!()); }
         DepKind::DylibDepFormats => { force!(dylib_dependency_formats, krate!()); }
-        DepKind::IsPanicRuntime => { force!(is_panic_runtime, krate!()); }
         DepKind::IsCompilerBuiltins => { force!(is_compiler_builtins, krate!()); }
         DepKind::HasGlobalAllocator => { force!(has_global_allocator, krate!()); }
         DepKind::HasPanicHandler => { force!(has_panic_handler, krate!()); }
@@ -1370,7 +1356,6 @@ pub fn force_from_dep_node<'a, 'gcx, 'lcx>(tcx: TyCtxt<'a, 'gcx, 'lcx>,
         DepKind::CheckTraitItemWellFormed => { force!(check_trait_item_well_formed, def_id!()); }
         DepKind::CheckImplItemWellFormed => { force!(check_impl_item_well_formed, def_id!()); }
         DepKind::ReachableNonGenerics => { force!(reachable_non_generics, krate!()); }
-        DepKind::NativeLibraries => { force!(native_libraries, krate!()); }
         DepKind::EntryFn => { force!(entry_fn, krate!()); }
         DepKind::PluginRegistrarFn => { force!(plugin_registrar_fn, krate!()); }
         DepKind::ProcMacroDeclsStatic => { force!(proc_macro_decls_static, krate!()); }
@@ -1378,6 +1363,7 @@ pub fn force_from_dep_node<'a, 'gcx, 'lcx>(tcx: TyCtxt<'a, 'gcx, 'lcx>,
         DepKind::CrateHash => { force!(crate_hash, krate!()); }
         DepKind::OriginalCrateName => { force!(original_crate_name, krate!()); }
         DepKind::ExtraFileName => { force!(extra_filename, krate!()); }
+        DepKind::Analysis => { force!(analysis, krate!()); }
 
         DepKind::AllTraitImplementations => {
             force!(all_trait_implementations, krate!());
@@ -1452,7 +1438,7 @@ pub fn force_from_dep_node<'a, 'gcx, 'lcx>(tcx: TyCtxt<'a, 'gcx, 'lcx>,
         DepKind::BackendOptimizationLevel => {
             force!(backend_optimization_level, krate!());
         }
-    }
+    );
 
     true
 }
@@ -1513,9 +1499,9 @@ impl_load_from_cache!(
     SymbolName => def_symbol_name,
     ConstIsRvaluePromotableToStatic => const_is_rvalue_promotable_to_static,
     CheckMatch => check_match,
-    TypeOfItem => type_of,
-    GenericsOfItem => generics_of,
-    PredicatesOfItem => predicates_of,
+    type_of => type_of,
+    generics_of => generics_of,
+    predicates_of => predicates_of,
     UsedTraitImports => used_trait_imports,
     CodegenFnAttrs => codegen_fn_attrs,
     SpecializationGraph => specialization_graph_of,

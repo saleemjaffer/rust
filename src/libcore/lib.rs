@@ -122,8 +122,8 @@
 #![feature(structural_match)]
 #![feature(abi_unadjusted)]
 #![feature(adx_target_feature)]
-#![feature(maybe_uninit)]
-#![feature(unrestricted_attribute_tokens)]
+#![feature(maybe_uninit, maybe_uninit_slice, maybe_uninit_array)]
+#![feature(external_doc)]
 
 #[prelude_import]
 #[allow(unused)]
