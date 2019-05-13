@@ -11,14 +11,15 @@ use rustc_target::abi::call::ArgType;
 
 use rustc_codegen_ssa::traits::*;
 
-use rustc_target::abi::{HasDataLayout, LayoutOf, Size, TyLayout, Abi as LayoutAbi};
+use rustc_target::abi::{HasDataLayout, LayoutOf};
 use rustc::ty::{self, Ty, Instance};
-use rustc::ty::layout::{self, PointerKind};
+use rustc::ty::layout::{self};
 
 use libc::c_uint;
 
 pub use rustc_target::spec::abi::Abi;
 pub use rustc::ty::layout::{FAT_PTR_ADDR, FAT_PTR_EXTRA};
+pub use rustc::ty::layout::{FnTypeExt as FnTypeExt1};
 pub use rustc_target::abi::call::*;
 
 macro_rules! for_each_kind {
@@ -547,17 +548,17 @@ impl<'tcx> FnTypeExt<'tcx> for FnType<'tcx, Ty<'tcx>> {
 
 impl AbiMethods<'tcx> for CodegenCx<'ll, 'tcx> {
     fn new_fn_type(&self, sig: ty::FnSig<'tcx>, extra_args: &[Ty<'tcx>]) -> FnType<'tcx, Ty<'tcx>> {
-        FnType::new(&self, sig, extra_args)
+        FnTypeExt1::new(self, sig, extra_args)
     }
     fn new_vtable(
         &self,
         sig: ty::FnSig<'tcx>,
         extra_args: &[Ty<'tcx>]
     ) -> FnType<'tcx, Ty<'tcx>> {
-        FnType::new_vtable(&self, sig, extra_args)
+        FnTypeExt1::new_vtable(self, sig, extra_args)
     }
     fn fn_type_of_instance(&self, instance: &Instance<'tcx>) -> FnType<'tcx, Ty<'tcx>> {
-        FnType::of_instance(&self, instance)
+        FnTypeExt1::of_instance(self, instance)
     }
 }
 

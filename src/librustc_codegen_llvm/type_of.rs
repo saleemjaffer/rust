@@ -1,8 +1,7 @@
-use crate::abi::{FnType, FnTypeExt};
 use crate::common::*;
 use crate::type_::Type;
 use rustc::ty::{self, Ty, TypeFoldable};
-use rustc::ty::layout::{self, Align, LayoutOf, PointeeInfo, Size, TyLayout};
+use rustc::ty::layout::{self, Align, LayoutOf, FnTypeExt, PointeeInfo, Size, TyLayout};
 use rustc_target::abi::{FloatTy, TyLayoutMethods};
 use rustc_mir::monomorphize::item::DefPathBasedNames;
 use rustc_codegen_ssa::traits::*;
@@ -239,7 +238,7 @@ impl<'tcx> LayoutLlvmExt<'tcx> for TyLayout<'tcx> {
                         ty::ParamEnv::reveal_all(),
                         &sig,
                     );
-                    cx.fn_ptr_backend_type(&FnType::new(cx, sig, &[]))
+                    cx.fn_ptr_backend_type(&FnTypeExt::new(cx, sig, &[]))
                 }
                 _ => self.scalar_llvm_type_at(cx, scalar, Size::ZERO)
             };

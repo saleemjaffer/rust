@@ -49,7 +49,8 @@ use std::fmt;
 pub trait CodegenObject: Copy + PartialEq + fmt::Debug {}
 impl<T: Copy + PartialEq + fmt::Debug> CodegenObject for T {}
 
-pub trait CodegenMethods<'tcx>:
+pub trait
+CodegenMethods<'tcx>:
     Backend<'tcx>
     + TypeMethods<'tcx>
     + MiscMethods<'tcx>
